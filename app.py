@@ -1,16 +1,24 @@
 import streamlit as st
 import pandas as pd
 import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
 import streamlit.components.v1 as components
 import json
 import time
 import random
 import requests
 
-# Kakao API Key (Ideally use st.secrets in production)
-# Default Keys (Can be overridden in UI)
-DEFAULT_REST_API_KEY = "8b6f5627ce019bb584336182db0c3aa9"
-DEFAULT_JS_API_KEY = "71cd3faa5bfc8f45b44d55abc4515554"
+# Kakao API Key (Load from .env or st.secrets)
+DEFAULT_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY")
+DEFAULT_JS_API_KEY = os.getenv("KAKAO_JS_API_KEY")
+
+# Check if keys are loaded
+if not DEFAULT_REST_API_KEY or not DEFAULT_JS_API_KEY:
+    st.error("API Key가 설정되지 않았습니다. .env 파일을 확인해주세요!")
 
 
 # Configuration
