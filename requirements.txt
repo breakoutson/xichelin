@@ -1,0 +1,6 @@
+streamlit
+pandas
+folium
+folium
+streamlit-folium
+requests
