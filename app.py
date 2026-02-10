@@ -64,7 +64,9 @@ def search_kakao_place(keyword):
         "x": DEFAULT_LON, # Center Longitude
         "y": DEFAULT_LAT, # Center Latitude
         "radius": 1000,    # Radius in meters (1km)
-        # "sort": "accuracy" # Default is accuracy, which is better for keyword match
+        "radius": 1000,    # Radius in meters (1km)
+        # "sort": "distance" # Sort by distance
+        "sort": "accuracy" # Default is accuracy
     }
     try:
         response = requests.get(url, headers=headers, params=params)
@@ -247,9 +249,17 @@ with tab1:
              st.session_state.selected_category = "전체" # Reset category
              st.rerun()
 
+    def reset_selection():
+        st.session_state.selection_status = None
+        st.session_state.selected_lat = None
+        st.session_state.selected_lon = None
+        st.session_state.selected_name = None
+        st.session_state.winner = None
+        st.session_state.selected_category = "전체"
+
     with search_col1:
         # Placeholder updated, bind to session state
-        st.text_input("장소 검색", label_visibility="collapsed", placeholder="장소명을 검색하세요 (예: 남산스퀘어 맛집)", key="search_query")
+        st.text_input("장소 검색", label_visibility="collapsed", placeholder="장소명을 검색하세요 (예: 닭갈비)", key="search_query", on_change=reset_selection)
     
     search_markers = [] # For map
 
@@ -261,10 +271,18 @@ with tab1:
             
             # Prepare markers for all search results
             for p in places:
+                # Check if already registered (by name)
+                is_registered = False
+                if not df.empty:
+                    if p['place_name'] in df['Name'].values:
+                         is_registered = True
+                
                 search_markers.append({
                     "lat": float(p['y']),
                     "lng": float(p['x']),
-                    "name": p['place_name']
+                    "name": p['place_name'],
+                    "isRegistered": is_registered,
+                    "address": p['address_name'] # Add address for info window
                 })
             
             
@@ -286,7 +304,9 @@ with tab1:
 
     # Restaurant Markers
     restaurant_markers = []
-    if not filtered_df.empty:
+    # Only show category-filtered existing markers if NO search query is active
+    # If search query is active, 'search_markers' will handle the display (Red/Blue)
+    if not st.session_state.search_query and not filtered_df.empty:
         for _, row in filtered_df.iterrows():
             if pd.notna(row['Latitude']) and pd.notna(row['Longitude']):
                 is_winner = (row['Name'] == st.session_state.winner)
@@ -345,34 +365,67 @@ with tab1:
                     var restaurants = {json.dumps(restaurant_markers)};
                     var selected = {json.dumps(selected_marker)};
                     var searchResults = {json.dumps(search_markers)};
+                    
+                    // Track active InfoWindow to support toggle
+                    var activeInfoWindow = null;
 
-                    // 1. Company Marker
-                    var imageSrc = "http://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png"; 
-                    var markerImage = new kakao.maps.MarkerImage(imageSrc, new kakao.maps.Size(40, 44)); 
+                    // 1. Company Marker (Visual: Big Building Emoji, Function: Invisible Clickable Marker)
+                    var companyOverlay = new kakao.maps.CustomOverlay({{
+                        position: new kakao.maps.LatLng(company.lat, company.lng),
+                        content: '<div style="font-size:80px; text-shadow: 2px 2px 5px rgba(0,0,0,0.3); line-height: 1; cursor: pointer;">🏢</div>',
+                        yAnchor: 0.3, // Centered vertically (user request: "middle")
+                        zIndex: 9
+                    }});
+                    companyOverlay.setMap(map);
+
+                    // Invisible marker for clicking
+                    var transparentImg = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+                    // Offset (40, 40) centers the 80x80 image on the coordinate, matching the Overlay's yAnchor: 0.5 (middle)
+                    var compImage = new kakao.maps.MarkerImage(transparentImg, new kakao.maps.Size(80, 80), {{offset: new kakao.maps.Point(40, 40)}}); 
                     var companyMarker = new kakao.maps.Marker({{
                         position: new kakao.maps.LatLng(company.lat, company.lng),
-                        title: company.name,
-                        image: markerImage,
+                        title: "Xi S&D 본사",
+                        image: compImage,
                         zIndex: 10
                     }});
                     companyMarker.setMap(map);
+
+                    var companyIw = new kakao.maps.InfoWindow({{
+                        content: '<div style="padding:5px;width:150px;text-align:center;"><b>Xi S&D 본사</b></div>'
+                    }});
+                    kakao.maps.event.addListener(companyMarker, 'click', function() {{
+                        if (activeInfoWindow === companyIw) {{
+                            companyIw.close();
+                            activeInfoWindow = null;
+                        }} else {{
+                            if (activeInfoWindow) {{
+                                activeInfoWindow.close();
+                            }}
+                            companyIw.open(map, companyMarker);
+                            activeInfoWindow = companyIw;
+                        }}
+                    }});
                     
-                    // Removed text label as requested
-                    // var iwContent = ... 
                     
                     // 2. Restaurant Markers
+                    // 2. Restaurant Markers (Registered Only) - Use standardized Blue
+                    var standardBlue = "https://maps.google.com/mapfiles/ms/icons/blue-dot.png";
+                    var standardRed = "https://maps.google.com/mapfiles/ms/icons/red-dot.png";
+
                     restaurants.forEach(function(place) {{
+                        var markerImage = new kakao.maps.MarkerImage(standardBlue, new kakao.maps.Size(32, 32));
                         var marker = new kakao.maps.Marker({{
                             map: map,
                             position: new kakao.maps.LatLng(place.lat, place.lng),
-                            title: place.name
+                            title: place.name,
+                            image: markerImage
                         }});
                         
-                        var content = '<div style="padding:5px;width:180px;font-family:sans-serif;">' + 
+                        var content = '<div style="padding:5px;width:150px;font-family:sans-serif;font-size:13px;">' + 
                             '<b>' + place.name + '</b>' + (place.isWinner ? ' 👑' : '') + '<br>' +
-                            '<span style="font-size:12px;color:gray;">' + place.cuisine + '</span><br>' +
-                            '⭐ ' + place.rating + '점<br>' +
-                            '</div>'; // Removed price
+                            '<span style="font-size:11px;color:gray;">' + place.cuisine + '</span><br>' +
+                            '⭐ ' + place.rating + '점' +
+                            '</div>'; 
 
                         var infowindow = new kakao.maps.InfoWindow({{
                             content: content,
@@ -380,28 +433,67 @@ with tab1:
                         }});
 
                         kakao.maps.event.addListener(marker, 'click', function() {{
-                            infowindow.open(map, marker);
+                            if (activeInfoWindow === infowindow) {{
+                                infowindow.close();
+                                activeInfoWindow = null;
+                            }} else {{
+                                if (activeInfoWindow) {{
+                                    activeInfoWindow.close();
+                                }}
+                                infowindow.open(map, marker);
+                                activeInfoWindow = infowindow;
+                            }}
                         }});
                     }});
+
+                    // 3. Search Result Markers
+                    // Use Numbered Markers (Blue=Registered, Red=Unregistered)
                     
-                    // 3. Search Result Markers (Blue)
-                    var searchImageSrc = "http://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_blue.png";
-                    var searchMarkerImage = new kakao.maps.MarkerImage(searchImageSrc, new kakao.maps.Size(24, 35));
-                    
-                    searchResults.forEach(function(place) {{
+                    searchResults.forEach(function(place, i) {{
+                        var index = i + 1;
+                        var color = place.isRegistered ? 'blue' : 'red';
+                        var imageSrc = 'https://raw.githubusercontent.com/Concept211/Google-Maps-Markers/master/images/marker_' + color + index + '.png';
+                        
+                        var markerImage = new kakao.maps.MarkerImage(imageSrc, new kakao.maps.Size(22, 40)); 
+                        
                         var marker = new kakao.maps.Marker({{
                             map: map,
                             position: new kakao.maps.LatLng(place.lat, place.lng),
                             title: place.name,
-                            image: searchMarkerImage
+                            image: markerImage,
+                            zIndex: place.isRegistered ? 5 : 3
                         }});
                         
+                        var infoContent = '';
+                        if (place.isRegistered) {{
+                            infoContent = '<div style="padding:5px;width:150px;font-family:sans-serif;font-size:13px;">' +
+                                          '<b>' + place.name + '</b><br>' +
+                                          '<span style="color:#d32f2f;font-size:11px;">✅ 이미 등록됨</span>' +
+                                          '</div>';
+                        }} else {{
+                            infoContent = '<div style="padding:5px;width:150px;font-family:sans-serif;font-size:13px;">' +
+                                          '<b>' + place.name + '</b><br>' +
+                                          '<span style="color:gray;font-size:11px;">' + (place.address || '') + '</span><br>' +
+                                          '<span style="color:blue;font-size:11px;">👉 목록에서 선택하여 등록</span>' +
+                                          '</div>';
+                        }}
+                        
                         var infowindow = new kakao.maps.InfoWindow({{
-                            content: '<div style="padding:5px;color:blue;">🔍 ' + place.name + '</div>'
+                            content: infoContent,
+                            removable: true
                         }});
                         
                         kakao.maps.event.addListener(marker, 'click', function() {{
-                             infowindow.open(map, marker);
+                             if (activeInfoWindow === infowindow) {{
+                                infowindow.close();
+                                activeInfoWindow = null;
+                            }} else {{
+                                if (activeInfoWindow) {{
+                                    activeInfoWindow.close();
+                                }}
+                                infowindow.open(map, marker);
+                                activeInfoWindow = infowindow;
+                            }}
                         }});
                     }});
 
@@ -413,10 +505,10 @@ with tab1:
                         var marker = new kakao.maps.Marker({{
                             map: map,
                             position: new kakao.maps.LatLng(selected.lat, selected.lng),
-                            zIndex: 5
+                            zIndex: 10 // Highest priority
                         }});
                          var infowindow = new kakao.maps.InfoWindow({{
-                            content: '<div style="padding:5px;color:red;font-weight:bold;">📍 ' + selected.name + '</div>'
+                            content: '<div style="padding:5px;width:150px;font-family:sans-serif;font-size:13px;"><b>' + selected.name + '</b><br><span style="color:red;font-size:11px;">📍 선택된 위치</span></div>'
                         }});
                         infowindow.open(map, marker);
                     }}
@@ -666,9 +758,20 @@ else:
                 st.sidebar.markdown(f"### 🔍 검색 결과: '{st.session_state.search_query}'")
                 st.sidebar.caption("아래 목록에서 선택하면 상세 정보를 볼 수 있습니다.")
                 
+                # Limit to Top 10 results to reduce clutter -> Removed by user request
+                # places = places[:10]
+                
                 for i, p in enumerate(places):
-                    # Button for each place
-                    label = f"{p['place_name']} ({p.get('category_group_name', '음식점')})"
+                    # Check registration status for consistent color coding
+                    is_registered_sidebar = False
+                    if not df.empty:
+                         if p['place_name'] in df['Name'].values:
+                             is_registered_sidebar = True
+
+                    emoji = "🔵" if is_registered_sidebar else "🔴"
+                    
+                    # Button for each place (with Index and Color)
+                    label = f"{emoji} {i+1}. {p['place_name']} ({p.get('category_group_name', '음식점')})"
                     if st.sidebar.button(label, key=f"sidebar_btn_{i}", use_container_width=True):
                         # --- Same Selection Logic as Dropdown ---
                         selected_place = p
@@ -708,10 +811,10 @@ else:
         
         if not cat_df.empty:
             st.sidebar.caption(f"총 {len(cat_df)}곳이 등록되어 있습니다.")
-            for idx, row in cat_df.iterrows():
+            for i, (idx, row) in enumerate(cat_df.iterrows()):
                 # Display average rating and count
                 rating_info = f"⭐{row['Rating']:.1f}"
-                label = f"{row['Name']} ({rating_info})"
+                label = f"{i+1}. {row['Name']} ({rating_info})"
                 
                 if st.sidebar.button(label, key=f"cat_res_btn_{idx}", use_container_width=True):
                      st.session_state.selection_status = {'type': 'existing', 'data': row}
@@ -741,10 +844,10 @@ else:
             # Sort by name for easier scanning? Or maybe Rating? Name is standard for directory.
             sorted_df = df.sort_values(by='Name')
             
-            for idx, row in sorted_df.iterrows():
+            for i, (idx, row) in enumerate(sorted_df.iterrows()):
                 # Display name and rating
                 rating_info = f"⭐{row['Rating']:.1f}"
-                label = f"{row['Name']} ({row['Cuisine']} | {rating_info})"
+                label = f"{i+1}. {row['Name']} ({row['Cuisine']} | {rating_info})"
                 
                 # Use original index for key to be safe
                 if st.sidebar.button(label, key=f"all_res_btn_{idx}", use_container_width=True):
