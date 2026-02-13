@@ -10,7 +10,12 @@ import streamlit.components.v1 as components
 import json
 import time
 import random
+import streamlit.components.v1 as components
+import json
+import time
+import random
 import requests
+from supabase import create_client, Client
 
 # Kakao API Key (Load from .env or st.secrets)
 DEFAULT_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY")
@@ -33,23 +38,61 @@ DEFAULT_LON = 126.9910438
 # Ensure data directory exists
 os.makedirs(DATA_DIR, exist_ok=True)
 
+# Supabase Setup
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+@st.cache_resource
+def init_supabase():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        st.warning("Supabase URL or Key not found in .env")
+        return None
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+supabase = init_supabase()
+
 def load_data():
-    if os.path.exists(DATA_FILE):
-        df = pd.read_csv(DATA_FILE)
-        # Ensure new columns exist for backward compatibility
-        expected_columns = ['Name', 'Cuisine', 'Rating', 'RatingCount', 'Review', 'Location', 'Latitude', 'Longitude', 'BestMenu', 'Recommender']
-        for col in expected_columns:
-            if col not in df.columns:
-                if col == 'RatingCount':
-                    df[col] = 1 # Default count for existing
-                else:
-                    df[col] = None 
+    if not supabase:
+         return pd.DataFrame(columns=['Name', 'Cuisine', 'Rating', 'RatingCount', 'Review', 'Location', 'Latitude', 'Longitude', 'BestMenu', 'Recommender', 'id'])
+
+    try:
+        response = supabase.table('restaurants').select("*").execute()
+        data = response.data
+        
+        if not data:
+             return pd.DataFrame(columns=['Name', 'Cuisine', 'Rating', 'RatingCount', 'Review', 'Location', 'Latitude', 'Longitude', 'BestMenu', 'Recommender', 'id'])
+        
+        df = pd.DataFrame(data)
+        
+        # Rename lower_case DB columns to Title_Case App columns
+        # Map: db_col -> App_Col
+        rename_map = {
+            'name': 'Name', 
+            'cuisine': 'Cuisine', 
+            'rating': 'Rating', 
+            'rating_count': 'RatingCount', 
+            'review': 'Review', 
+            'location': 'Location', 
+            'latitude': 'Latitude', 
+            'longitude': 'Longitude', 
+            'best_menu': 'BestMenu', 
+            'recommender': 'Recommender',
+            'price': 'Price',
+            # id is kept as is (lowercase 'id' from DB usually, or I can map it to 'ID')
+            'id': 'id' 
+        }
+        # Only rename columns that exist (in case DB has extra or missing)
+        df = df.rename(columns=rename_map)
+        
         return df
-    else:
-        return pd.DataFrame(columns=['Name', 'Cuisine', 'Rating', 'RatingCount', 'Review', 'Location', 'Latitude', 'Longitude', 'BestMenu', 'Recommender'])
+    except Exception as e:
+        st.error(f"Error loading data from Supabase: {e}")
+        return pd.DataFrame(columns=['Name', 'Cuisine', 'Rating', 'RatingCount', 'Review', 'Location', 'Latitude', 'Longitude', 'BestMenu', 'Recommender', 'id'])
 
 def save_data(df):
-    df.to_csv(DATA_FILE, index=False)
+    # Deprecated: Saving entire DF to CSV is replaced by direct DB inserts/updates.
+    # Keeping this pass to prevent immediate crashes before refactoring call sites.
+    pass
 
 # Helper: Get current REST API Key
 def get_rest_api_key():
@@ -140,7 +183,7 @@ if 'search_query' not in st.session_state:
 col_header, col_roulette = st.columns([3, 1], gap="medium") 
 
 with col_header:
-    st.title("Xi S&D 맛집 정보 시스템")
+    st.title("자이에스앤디 점심 메뉴 추천 시스템")
     # st.markdown("회사 근처 맛집을 공유하고 찾아보세요! 지도에서 위치를 선택하여 추가할 수 있습니다.")  <-- Removed
 
 with col_roulette:
@@ -646,13 +689,28 @@ if status and status.get('type') == 'existing':
                         updated_recommender = f"{current_recommender}, {new_user}" if pd.notna(current_recommender) else new_user
                         
                         # Save
-                        df.at[i, 'Rating'] = updated_rating
-                        df.at[i, 'RatingCount'] = new_count
-                        df.at[i, 'Review'] = updated_review
-                        df.at[i, 'Recommender'] = updated_recommender
-                        
-                        save_data(df)
-                        st.session_state.selection_status['data'] = df.iloc[i] # Update visual state
+                        # Save to Supabase
+                        try:
+                            row_id = int(df.at[i, 'id'])
+                            payload = {
+                                'rating': float(updated_rating),
+                                'rating_count': int(new_count),
+                                'review': updated_review,
+                                'recommender': updated_recommender
+                            }
+                            supabase.table('restaurants').update(payload).eq('id', row_id).execute()
+                            
+                            # Update local state for immediate feedback
+                            updated_row = df.iloc[i].copy()
+                            updated_row['Rating'] = updated_rating
+                            updated_row['RatingCount'] = new_count
+                            updated_row['Review'] = updated_review
+                            updated_row['Recommender'] = updated_recommender
+                            
+                            st.session_state.selection_status['data'] = updated_row
+                        except Exception as e:
+                            st.error(f"업데이트 실패: {e}")
+                            st.stop()
                         st.session_state.search_query = "" # Clear search
                         st.success("소중한 의견이 추가되었습니다!")
                         st.rerun()
@@ -698,25 +756,47 @@ elif status and status.get('type') == 'new':
             if not name:
                 st.sidebar.error("식당 이름을 입력해주세요.")
             else:
-                new_data = {
-                    'Name': name,
-                    'Cuisine': cuisine,
-                    'Rating': rating,
-                    'RatingCount': 1, # Init count
-                    'Review': f"[{recommender}] {review} (⭐{rating})", # Format initial review
-                    'Location': place.get('address_name', ''),
-                    'Latitude': float(place['y']),
-                    'Longitude': float(place['x']),
-                    'BestMenu': best_menu,
-                    'Price': "", # Empty
-                    'Recommender': recommender
+                # Save to Supabase
+                db_payload = {
+                    'name': name,
+                    'cuisine': cuisine,
+                    'rating': rating,
+                    'rating_count': 1,
+                    'review': f"[{recommender}] {review} (⭐{rating})",
+                    'location': place.get('address_name', ''),
+                    'latitude': float(place['y']),
+                    'longitude': float(place['x']),
+                    'best_menu': best_menu,
+                    'recommender': recommender
                 }
-                df = load_data()
-                df = pd.concat([df, pd.DataFrame([new_data])], ignore_index=True)
-                save_data(df)
                 
-                st.sidebar.success("맛집이 성공적으로 추가되었습니다! 🎉")
-                st.session_state.selection_status = {'type': 'existing', 'data': new_data}
+                try:
+                    response = supabase.table('restaurants').insert(db_payload).execute()
+                    if response.data:
+                        # Construct state data from response (includes ID)
+                        inserted = response.data[0]
+                        # Map back to App format
+                        new_data_state = {
+                            'Name': inserted['name'],
+                            'Cuisine': inserted['cuisine'],
+                            'Rating': inserted['rating'],
+                            'RatingCount': inserted['rating_count'],
+                            'Review': inserted['review'],
+                            'Location': inserted['location'],
+                            'Latitude': inserted['latitude'],
+                            'Longitude': inserted['longitude'],
+                            'BestMenu': inserted['best_menu'],
+                            'Recommender': inserted['recommender'],
+                            'id': inserted['id']
+                        }
+                        
+                        st.sidebar.success("맛집이 성공적으로 추가되었습니다! 🎉")
+                        st.session_state.selection_status = {'type': 'existing', 'data': new_data_state}
+                    else:
+                        st.error("데이터 저장 실패 (응답 없음)")
+                except Exception as e:
+                    st.error(f"저장 중 오류가 발생했습니다: {e}")
+                    st.stop()
                 st.session_state.search_query = "" # Clear search
                 st.rerun()
 
@@ -736,15 +816,12 @@ else:
                 st.session_state.selected_lon = s_lon
                 st.session_state.selected_name = selected_place['place_name']
                 
-                # Proximity Check
+                # Check by Name (Distance check caused errors for neighbors)
                 match_found = None
                 if not df.empty:
-                    for idx, row in df.iterrows():
-                        if pd.notna(row['Latitude']) and pd.notna(row['Longitude']):
-                             dist = calculate_distance(s_lat, s_lon, row['Latitude'], row['Longitude'])
-                             if dist < 20: 
-                                 match_found = row
-                                 break
+                    matches = df[df['Name'] == selected_place['place_name']]
+                    if not matches.empty:
+                        match_found = matches.iloc[0]
                 
                 if match_found is not None:
                      st.session_state.selection_status = {'type': 'existing', 'data': match_found}
@@ -782,15 +859,12 @@ else:
                         st.session_state.selected_lon = s_lon
                         st.session_state.selected_name = selected_place['place_name']
                         
-                        # Proximity Check
+                        # Check by Name (Distance check caused errors for neighbors)
                         match_found = None
                         if not df.empty:
-                            for idx, row in df.iterrows():
-                                if pd.notna(row['Latitude']) and pd.notna(row['Longitude']):
-                                    dist = calculate_distance(s_lat, s_lon, row['Latitude'], row['Longitude'])
-                                    if dist < 20: 
-                                        match_found = row
-                                        break
+                            matches = df[df['Name'] == selected_place['place_name']]
+                            if not matches.empty:
+                                match_found = matches.iloc[0]
                         
                         if match_found is not None:
                             st.session_state.selection_status = {'type': 'existing', 'data': match_found}
