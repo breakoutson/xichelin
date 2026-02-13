@@ -198,6 +198,18 @@ if st.session_state.search_query:
         target_df['Distance'] = target_df.apply(_calc, axis=1)
         target_df = target_df.sort_values(by='Distance', ascending=True)
 
+    # 1-B. Detail View (Search)
+    s_status = st.session_state.selection_status
+    if s_status and s_status.get('type') == 'existing':
+        d_row = s_status['data']
+        with st.container(border=True):
+            st.subheader(f"🍽️ {d_row['Name']}")
+            st.caption(f"⭐ {d_row['Rating']:.1f} | {d_row['BestMenu']}")
+            if st.button("닫기", key="close_search_detail"):
+                st.session_state.selection_status = None
+                st.rerun()
+            st.info(d_row['Review'])
+
     # 2. List View
     if not target_df.empty:
         st.caption(f"📋 검색 결과 ({len(target_df)}곳)")
