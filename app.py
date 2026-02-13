@@ -389,6 +389,7 @@ with tab1:
     
     kakao_map_html = f"""
     <!-- Map Container -->
+    <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
     <div id="map" style="width:100%; height:700px; border:1px solid #ccc;"></div>
 
     <script>
