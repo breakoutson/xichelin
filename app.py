@@ -41,15 +41,46 @@ if not DEFAULT_REST_API_KEY or not DEFAULT_JS_API_KEY:
 st.set_page_config(page_title="회사 점심 지도", page_icon="🍽️", layout="wide")
 
 # CSS 주입: 버튼 안의 텍스트를 좌측으로 정렬
+# CSS 주입: 모바일 레이아웃 강제 조정 (가로 스크롤/한줄 정렬)
 st.markdown("""
     <style>
+    /* 모바일 환경 (768px 이하)에서 컬럼 강제 가로 정렬 */
+    @media (max-width: 768px) {
+        /* 컬럼 컨테이너: 가로 방향 유지, 줄바꿈 금지, 가로 스크롤 허용 */
+        div[data-testid="stHorizontalBlock"] {
+             flex-direction: row !important;
+             flex-wrap: nowrap !important;
+             overflow-x: auto !important;
+             gap: 5px !important;
+             padding-bottom: 5px; /* 스크롤바 공간 */
+        }
+        
+        /* 개별 컬럼: 내용물 크기에 맞게 자동 조절 (비율 무시) */
+        div[data-testid="column"] {
+            flex: 0 0 auto !important;
+            width: auto !important;
+            min-width: auto !important; 
+        }
+        
+        /* 버튼 스타일: 컴팩트하게, 강제 한줄 표시 */
+        div.stButton > button {
+            width: auto !important; /* 버튼 내용만큼만 차지 */
+            padding: 4px 8px !important; /* 내부 여백 축소 */
+            font-size: 13px !important; /* 글자 크기 축소 */
+            white-space: nowrap !important; /* 줄바꿈 금지 */
+            height: auto !important;
+            min-height: 0px !important;
+        }
+        
+        /* 리스트 내부의 텍스트가 잘리지 않게 조정 */
+        p, div {
+             font-size: 13px !important;
+        }
+    }
+    
+    /* PC/전체 공통: 버튼 텍스트 정렬 */
     div.stButton > button {
-        display: block !important;
-        text-align: left !important;
-        padding-left: 20px !important;
-        width: 100% !important;
-        font-family: "Courier New", Courier, monospace !important;
-        white-space: pre !important;
+        text-align: left; /* 좌측 정렬 복구 */
     }
     </style>
     """, unsafe_allow_html=True)
@@ -645,7 +676,7 @@ js_key = st.session_state.get('kakao_js_api_key', DEFAULT_JS_API_KEY) # Ensure k
 kakao_map_html = f"""
 <!-- Map Container -->
 <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
-<div id="map" style="width:100%; height:600px; border:1px solid #ccc; touch-action: none;"></div>
+<div id="map" style="width:100%; height:420px; border:1px solid #ccc; touch-action: none;"></div>
 
 <script>
     function initMap() {{
@@ -740,8 +771,8 @@ kakao_map_html = f"""
         onload="initMap()"></script>
 """
 
-# Render Map (Fixed Height for Mobile ~60% Screen)
-components.html(kakao_map_html, height=620)
+# Render Map (Fixed Height for Mobile ~Reduced)
+components.html(kakao_map_html, height=440)
 
 
 
