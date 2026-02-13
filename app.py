@@ -19,8 +19,12 @@ from supabase import create_client, Client
 
 # Helper function to get secrets/env
 def get_secret(key):
-    if key in st.secrets:
-        return st.secrets[key]
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        # If secrets not found or generic error, fallback to env
+        pass
     return os.getenv(key)
 
 # Kakao API Key
@@ -35,6 +39,20 @@ if not DEFAULT_REST_API_KEY or not DEFAULT_JS_API_KEY:
 # Configuration
 # Page config must be the first Streamlit command
 st.set_page_config(page_title="회사 점심 지도", page_icon="🍽️", layout="wide")
+
+# CSS 주입: 버튼 안의 텍스트를 좌측으로 정렬
+st.markdown("""
+    <style>
+    div.stButton > button {
+        display: block !important;
+        text-align: left !important;
+        padding-left: 20px !important;
+        width: 100% !important;
+        font-family: "Courier New", Courier, monospace !important;
+        white-space: pre !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 DATA_DIR = 'data'
 DATA_FILE = os.path.join(DATA_DIR, 'restaurants.csv')
@@ -254,6 +272,7 @@ with col_roulette:
 
 
 # Calculate average location for map center
+# Calculate average location for map center
 # If selection exists, center map there. Otherwise avg or default.
 if st.session_state.selected_lat:
     avg_lat = st.session_state.selected_lat
@@ -264,679 +283,467 @@ elif not df.empty and pd.notna(df['Latitude'].mean()):
 else:
     avg_lat, avg_lon = DEFAULT_LAT, DEFAULT_LON
 
-# --- Layout with Tabs ---
-tab1, tab2 = st.tabs(["🗺️ 지도 보기", "📋 맛집 리스트"])
+# --- Layout with Tabs (Removed for Mobile UX) ---
+# Previous tab logic removed. Now using single page vertical
+# --- Layout Reorganization for Mobile UX ---
 
-# --- Tab 1: Map Logic (Kakao JS API) ---
-with tab1:
-    # st.header("🍱 맛집 지도 (Kakao Map)") <-- Removed
+# 1. Search & Filter Controls (Top)
+# Header Removed as requested
+
+# Search Bar
+def reset_selection():
+    st.session_state.selection_status = None
+    st.session_state.selected_lat = None
+    st.session_state.selected_lon = None
+    st.session_state.selected_name = None
+    st.session_state.winner = None
+
+def reset_all_state():
+    st.session_state.search_query = ""
+    st.session_state.selected_category = "전체"
+    reset_selection()
+
+def set_category_state(cat):
+    st.session_state.selected_category = cat
+    st.session_state.search_query = ""
+    st.session_state.winner = None # Reset random result
+
+col_search, col_reset = st.columns([3, 1])
+with col_search:
+    st.text_input("장소 검색", label_visibility="collapsed", placeholder="장소명 검색 (예: 닭갈비)", key="search_query", on_change=reset_selection)
+with col_reset:
+    st.button("🔄 초기화", use_container_width=True, on_click=reset_all_state)
+
+# Category Buttons (1 Row of 8)
+categories = ["전체", "한식", "중식", "일식", "양식", "분식", "술집", "기타"]
+cat_cols = st.columns(8) # One row for all
+
+for i, cat in enumerate(categories):
+    btn_type = "primary" if st.session_state.selected_category == cat else "secondary"
+    cat_cols[i].button(cat, key=f"cat_{i}", type=btn_type, use_container_width=True, on_click=set_category_state, args=(cat,))
+
+# Sort Options (No Label)
+st.write("") # Spacer
+sort_col1, sort_col2, sort_col3 = st.columns(3)
+if 'sort_option' not in st.session_state:
+    st.session_state.sort_option = 'Rating' # Default
+
+if sort_col1.button("⭐ 평점순", use_container_width=True, type="primary" if st.session_state.sort_option == 'Rating' else "secondary"):
+    st.session_state.sort_option = 'Rating'
+    st.session_state.winner = None # Reset random result
+    st.rerun()
+if sort_col2.button("📏 거리순", help="현재 지도 중심 기준", use_container_width=True, type="primary" if st.session_state.sort_option == 'Distance' else "secondary"):
+    st.session_state.sort_option = 'Distance'
+    st.session_state.winner = None # Reset random result
+    st.rerun()
+if sort_col3.button("🆕 최신순", use_container_width=True, type="primary" if st.session_state.sort_option == 'Newest' else "secondary"):
+    st.session_state.sort_option = 'Newest'
+    st.session_state.winner = None # Reset random result
+    st.rerun()
+
+st.divider()
+
+# --- Logic for Filtering & Sorting ---
+search_markers = [] # For map
+
+# Global Filter Logic
+filtered_df = df.copy()
+
+# 1. Search Query Filter
+if st.session_state.search_query:
+    # If search, ignore category? Or combined? Usually search overrides category.
+    # Let's search Kakao API first
+    places = search_kakao_place(st.session_state.search_query)
     
-    # 1. Category Filter UI
-    categories = ["전체", "한식", "중식", "일식", "양식", "분식", "술집", "기타"]
-    # st.write("🔽 **카테고리 필터**") <-- Removed
-    cat_cols = st.columns(len(categories))
-    for i, cat in enumerate(categories):
-        # Determine button type (primary if selected)
-        btn_type = "primary" if st.session_state.selected_category == cat else "secondary"
-        if cat_cols[i].button(cat, key=f"cat_{i}", type=btn_type, use_container_width=True):
-            st.session_state.selected_category = cat
-            st.rerun()
-
-    # 2. Search & Select Logic
-    # st.write("---") <-- Removed
-    search_col1, search_col2 = st.columns([3, 1])
+    # Also filter local DB for name match
+    filtered_df = filtered_df[filtered_df['Name'].str.contains(st.session_state.search_query)]
     
-    # Refresh Button Logic (must be checked BEFORE text_input to update state)
-    with search_col2:
-         if st.button("🔄 초기화", use_container_width=True):
-             st.session_state.search_query = ""
-             st.session_state.selection_status = None
-             st.session_state.selected_lat = None
-             st.session_state.selected_lon = None
-             st.session_state.selected_name = None
-             st.session_state.winner = None # Reset random winner
-             st.session_state.selected_category = "전체" # Reset category
-             st.rerun()
-
-    def reset_selection():
-        st.session_state.selection_status = None
-        st.session_state.selected_lat = None
-        st.session_state.selected_lon = None
-        st.session_state.selected_name = None
-        st.session_state.winner = None
-        st.session_state.selected_category = "전체"
-
-    with search_col1:
-        # Placeholder updated, bind to session state
-        st.text_input("장소 검색", label_visibility="collapsed", placeholder="장소명을 검색하세요 (예: 닭갈비)", key="search_query", on_change=reset_selection)
-    
-    search_markers = [] # For map
-
-    if st.session_state.search_query:
-        places = search_kakao_place(st.session_state.search_query)
-        if places:
-             # Just show count, no instruction to use dropdown
-            st.caption(f"🔍 **{len(places)}**개의 장소가 검색되었습니다. (좌측 사이드바 목록 확인)")
+    if places:
+        st.caption(f"🔍 **{len(places)}**개의 장소가 검색되었습니다.")
+        for p in places:
+            is_registered = False
+            if not df.empty:
+                if p['place_name'] in df['Name'].values:
+                        is_registered = True
             
-            # Prepare markers for all search results
-            for p in places:
-                # Check if already registered (by name)
-                is_registered = False
-                if not df.empty:
-                    if p['place_name'] in df['Name'].values:
-                         is_registered = True
-                
-                search_markers.append({
-                    "lat": float(p['y']),
-                    "lng": float(p['x']),
-                    "name": p['place_name'],
-                    "isRegistered": is_registered,
-                    "address": p['address_name'] # Add address for info window
-                })
-            
-            
-    # Removed auto-reset logic here to allow Random/Category selections without search query
-
-    # 3. Prepare Data for JS (Filtered)
-    # Company Marker
-    company_marker = {
-        "lat": DEFAULT_LAT,
-        "lng": DEFAULT_LON,
-        "name": "Xi S&D",
-        "type": "company"
-    }
-    
-    # Filter DataFrame based on Category
-    filtered_df = df.copy()
+            search_markers.append({
+                "lat": float(p['y']),
+                "lng": float(p['x']),
+                "name": p['place_name'],
+                "isRegistered": is_registered,
+                "address": p['address_name']
+            })
+else:
+    # 2. Category Filter
     if st.session_state.selected_category != "전체":
         filtered_df = filtered_df[filtered_df['Cuisine'] == st.session_state.selected_category]
 
-    # Restaurant Markers
-    restaurant_markers = []
-    # Only show category-filtered existing markers if NO search query is active
-    # If search query is active, 'search_markers' will handle the display (Red/Blue)
-    if not st.session_state.search_query and not filtered_df.empty:
-        for _, row in filtered_df.iterrows():
-            if pd.notna(row['Latitude']) and pd.notna(row['Longitude']):
-                is_winner = (row['Name'] == st.session_state.winner)
-                marker_data = {
-                    "lat": row['Latitude'],
-                    "lng": row['Longitude'],
-                    "name": row['Name'],
-                    "cuisine": row['Cuisine'],
-                    "rating": row['Rating'],
-                    "bestMenu": row['BestMenu'],
-                    "price": row['Price'] if pd.notna(row['Price']) else "-",
-                    "isWinner": is_winner
-                }
-                restaurant_markers.append(marker_data)
-    
-    # Selected Location Marker
-    selected_marker = None
-    if st.session_state.selected_lat:
-        selected_marker = {
-            "lat": st.session_state.selected_lat,
-            "lng": st.session_state.selected_lon,
-            "name": st.session_state.selected_name or "선택된 위치"
-        }
-
-    # Center Logic
-    center_lat = st.session_state.selected_lat if st.session_state.selected_lat else avg_lat
-    center_lon = st.session_state.selected_lon if st.session_state.selected_lon else avg_lon
-
-    # JavaScript Template
-    js_key = st.session_state.get('js_api_key', DEFAULT_JS_API_KEY)
-    
-    kakao_map_html = f"""
-    <!-- Map Container -->
-    <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
-    <div id="map" style="width:100%; height:700px; border:1px solid #ccc;"></div>
-
-    <script>
-        function initMap() {{
-            if (typeof kakao === 'undefined') {{
-                return;
-            }}
-
-            kakao.maps.load(function() {{
-                try {{
-                    var container = document.getElementById('map');
-                    var options = {{
-                        center: new kakao.maps.LatLng({center_lat}, {center_lon}),
-                        level: 3
-                    }};
-
-                    var map = new kakao.maps.Map(container, options);
-                    
-                    // --- Markers & InfoWindows ---
-                    
-                    // Data from Python
-                    var company = {json.dumps(company_marker)};
-                    var restaurants = {json.dumps(restaurant_markers)};
-                    var selected = {json.dumps(selected_marker)};
-                    var searchResults = {json.dumps(search_markers)};
-                    
-                    // Track active InfoWindow to support toggle
-                    var activeInfoWindow = null;
-
-                    // 1. Company Marker (Visual: Big Building Emoji, Function: Invisible Clickable Marker)
-                    var companyOverlay = new kakao.maps.CustomOverlay({{
-                        position: new kakao.maps.LatLng(company.lat, company.lng),
-                        content: '<div style="font-size:80px; text-shadow: 2px 2px 5px rgba(0,0,0,0.3); line-height: 1; cursor: pointer;">🏢</div>',
-                        yAnchor: 0.3, // Centered vertically (user request: "middle")
-                        zIndex: 9
-                    }});
-                    companyOverlay.setMap(map);
-
-                    // Invisible marker for clicking
-                    var transparentImg = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-                    // Offset (40, 40) centers the 80x80 image on the coordinate, matching the Overlay's yAnchor: 0.5 (middle)
-                    var compImage = new kakao.maps.MarkerImage(transparentImg, new kakao.maps.Size(80, 80), {{offset: new kakao.maps.Point(40, 40)}}); 
-                    var companyMarker = new kakao.maps.Marker({{
-                        position: new kakao.maps.LatLng(company.lat, company.lng),
-                        title: "Xi S&D 본사",
-                        image: compImage,
-                        zIndex: 10
-                    }});
-                    companyMarker.setMap(map);
-
-                    var companyIw = new kakao.maps.InfoWindow({{
-                        content: '<div style="padding:5px;width:150px;text-align:center;"><b>Xi S&D 본사</b></div>'
-                    }});
-                    kakao.maps.event.addListener(companyMarker, 'click', function() {{
-                        if (activeInfoWindow === companyIw) {{
-                            companyIw.close();
-                            activeInfoWindow = null;
-                        }} else {{
-                            if (activeInfoWindow) {{
-                                activeInfoWindow.close();
-                            }}
-                            companyIw.open(map, companyMarker);
-                            activeInfoWindow = companyIw;
-                        }}
-                    }});
-                    
-                    
-                    // 2. Restaurant Markers
-                    // 2. Restaurant Markers (Registered Only) - Use standardized Blue
-                    var standardBlue = "https://maps.google.com/mapfiles/ms/icons/blue-dot.png";
-                    var standardRed = "https://maps.google.com/mapfiles/ms/icons/red-dot.png";
-
-                    restaurants.forEach(function(place) {{
-                        var markerImage = new kakao.maps.MarkerImage(standardBlue, new kakao.maps.Size(32, 32));
-                        var marker = new kakao.maps.Marker({{
-                            map: map,
-                            position: new kakao.maps.LatLng(place.lat, place.lng),
-                            title: place.name,
-                            image: markerImage
-                        }});
-                        
-                        var content = '<div style="padding:5px;width:150px;font-family:sans-serif;font-size:13px;">' + 
-                            '<b>' + place.name + '</b>' + (place.isWinner ? ' 👑' : '') + '<br>' +
-                            '<span style="font-size:11px;color:gray;">' + place.cuisine + '</span><br>' +
-                            '⭐ ' + place.rating + '점' +
-                            '</div>'; 
-
-                        var infowindow = new kakao.maps.InfoWindow({{
-                            content: content,
-                            removable: true
-                        }});
-
-                        kakao.maps.event.addListener(marker, 'click', function() {{
-                            if (activeInfoWindow === infowindow) {{
-                                infowindow.close();
-                                activeInfoWindow = null;
-                            }} else {{
-                                if (activeInfoWindow) {{
-                                    activeInfoWindow.close();
-                                }}
-                                infowindow.open(map, marker);
-                                activeInfoWindow = infowindow;
-                            }}
-                        }});
-                    }});
-
-                    // 3. Search Result Markers
-                    // Use Numbered Markers (Blue=Registered, Red=Unregistered)
-                    
-                    searchResults.forEach(function(place, i) {{
-                        var index = i + 1;
-                        var color = place.isRegistered ? 'blue' : 'red';
-                        var imageSrc = 'https://raw.githubusercontent.com/Concept211/Google-Maps-Markers/master/images/marker_' + color + index + '.png';
-                        
-                        var markerImage = new kakao.maps.MarkerImage(imageSrc, new kakao.maps.Size(22, 40)); 
-                        
-                        var marker = new kakao.maps.Marker({{
-                            map: map,
-                            position: new kakao.maps.LatLng(place.lat, place.lng),
-                            title: place.name,
-                            image: markerImage,
-                            zIndex: place.isRegistered ? 5 : 3
-                        }});
-                        
-                        var infoContent = '';
-                        if (place.isRegistered) {{
-                            infoContent = '<div style="padding:5px;width:150px;font-family:sans-serif;font-size:13px;">' +
-                                          '<b>' + place.name + '</b><br>' +
-                                          '<span style="color:#d32f2f;font-size:11px;">✅ 이미 등록됨</span>' +
-                                          '</div>';
-                        }} else {{
-                            infoContent = '<div style="padding:5px;width:150px;font-family:sans-serif;font-size:13px;">' +
-                                          '<b>' + place.name + '</b><br>' +
-                                          '<span style="color:gray;font-size:11px;">' + (place.address || '') + '</span><br>' +
-                                          '<span style="color:blue;font-size:11px;">👉 목록에서 선택하여 등록</span>' +
-                                          '</div>';
-                        }}
-                        
-                        var infowindow = new kakao.maps.InfoWindow({{
-                            content: infoContent,
-                            removable: true
-                        }});
-                        
-                        kakao.maps.event.addListener(marker, 'click', function() {{
-                             if (activeInfoWindow === infowindow) {{
-                                infowindow.close();
-                                activeInfoWindow = null;
-                            }} else {{
-                                if (activeInfoWindow) {{
-                                    activeInfoWindow.close();
-                                }}
-                                infowindow.open(map, marker);
-                                activeInfoWindow = infowindow;
-                            }}
-                        }});
-                    }});
-
-                    // 4. Selected Marker (Use same logic or highlight)
-                    if (selected) {{
-                        // Focus is moved by center option, marker might diligently overlay search result
-                        // If selected is already in searchResults, maybe just open its infowindow?
-                        // For simplicity, draw it on top
-                        var marker = new kakao.maps.Marker({{
-                            map: map,
-                            position: new kakao.maps.LatLng(selected.lat, selected.lng),
-                            zIndex: 10 // Highest priority
-                        }});
-                         var infowindow = new kakao.maps.InfoWindow({{
-                            content: '<div style="padding:5px;width:150px;font-family:sans-serif;font-size:13px;"><b>' + selected.name + '</b><br><span style="color:red;font-size:11px;">📍 선택된 위치</span></div>'
-                        }});
-                        infowindow.open(map, marker);
-                    }}
-                    
-                    // Zoom Control
-                    var zoomControl = new kakao.maps.ZoomControl();
-                    map.addControl(zoomControl, kakao.maps.ControlPosition.RIGHT);
-                    
-                }} catch (e) {{
-                    console.error("Map Error:", e);
-                }}
-            }});
-        }}
-    </script>
-    
-    <!-- Load SDK -->
-    <script type="text/javascript" 
-            src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={js_key}&libraries=services&autoload=false"
-            onload="initMap()"></script>
-    """
-    
-    # Render Map
-    components.html(kakao_map_html, height=710)
-    st.caption("ℹ️ **지도 클릭은 현재 지원되지 않습니다.** 맛집을 등록하려면 위쪽 **'장소 검색'**을 이용해주세요! (검색 후 선택하면 자동으로 입력됩니다)")
+# 3. Sorting
+if not filtered_df.empty:
+    if st.session_state.sort_option == 'Rating':
+        filtered_df = filtered_df.sort_values(by='Rating', ascending=False)
+    elif st.session_state.sort_option == 'Newest':
+        # Assuming 'id' is somewhat chronological or if we had created_at
+        if 'id' in filtered_df.columns:
+             filtered_df = filtered_df.sort_values(by='id', ascending=False)
+    elif st.session_state.sort_option == 'Distance':
+        # Sort by distance from current map center (or default)
+        # Sort by distance from Company (Xi S&D)
+        center_lat = DEFAULT_LAT
+        center_lon = DEFAULT_LON
+        
+        def calc_dist(row):
+            if pd.isna(row['Latitude']) or pd.isna(row['Longitude']):
+                return 99999
+            return calculate_distance(center_lat, center_lon, row['Latitude'], row['Longitude'])
+        
+        filtered_df['Distance'] = filtered_df.apply(calc_dist, axis=1)
+        filtered_df = filtered_df.sort_values(by='Distance', ascending=True)
 
 
-# --- Tab 2: List Logic ---
-with tab2:
-    st.header("� 저장된 맛집 리스트")
-    if not df.empty:
-        # Metrics
-        col1, col2, col3 = st.columns(3)
-        col1.metric("총 맛집 수", f"{len(df)}곳")
-        col2.metric("평균 평점", f"{df['Rating'].mean():.1f}점")
-        if 'Price' in df.columns:
-             # Clean price to numeric if possible for calc, but simple mode for now
-             pass
-
-        # Highlight winner in dataframe
-        def highlight_winner(row):
-            if row['Name'] == st.session_state.winner:
-                # RGBA for transparency (Green with 0.3 opacity)
-                return ['background-color: rgba(76, 175, 80, 0.3); border: 2px solid #4CAF50'] * len(row)
-            else:
-                return [''] * len(row)
-
-        st.dataframe(
-            df.style.apply(highlight_winner, axis=1),
-            column_config={
-                "Rating": st.column_config.NumberColumn(
-                    "평점",
-                    help="점수 (0-100)",
-                    format="%d 점",
-                ),
-                 "Review": st.column_config.TextColumn("리뷰", width="large"),
-                 "BestMenu": st.column_config.TextColumn("대표 메뉴", width="small"),
-                 "Price": st.column_config.TextColumn("가격", width="small"),
-                 "Name": "식당 이름",
-                 "Cuisine": "음식 종류",
-                 "Location": "위치 설명",
-                 "Latitude": None, # Hide raw coords
-                 "Longitude": None
-            },
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("아직 등록된 맛집이 없습니다.")
-
-
-# --- Sidebar Form (Context Sensitive) ---
-st.sidebar.markdown("## 🏘️ 플레이스 정보")
-
+# --- 2. Dashboard Interface (List & Detail) ---
+# This replaces the Sidebar and Dataframe logic
 status = st.session_state.selection_status
 
-# Case 1: Existing Restaurant Selected
-# Case 1: Existing Restaurant Selected
-if status and status.get('type') == 'existing':
-    # Back Button at Top
-    if st.sidebar.button("⬅️ 뒤로 가기", key="back_btn_existing", use_container_width=True):
-        st.session_state.selection_status = None
-        st.session_state.selected_lat = None
-        st.session_state.selected_lon = None
-        st.session_state.selected_name = None
-        st.rerun()
+# Container for the dashboard list
+dashboard_container = st.container()
 
-    row = status['data']
-    st.sidebar.success("✅ **등록된 맛집입니다!**")
-    
-    st.sidebar.title(f"🍽️ {row['Name']}")
-    st.sidebar.caption(f"{row['Cuisine']} | ⭐ {row['Rating']:.1f}점 ({int(row.get('RatingCount', 1))}명 참여)")
-    
-    st.sidebar.divider()
-    
-    st.sidebar.markdown(f"**👍 맛있었던 메뉴**\n: {row['BestMenu']}")
-    # Price removed
-    
-    if pd.notna(row.get('Recommender')):
-        st.sidebar.markdown(f"**💁‍♂️ 추천인**\n: {row['Recommender']}")
+with dashboard_container:
+    # A. Selected Item Detail View (Top Priority if specific selection exists)
+    if status and status.get('type') == 'existing':
+        # Existing Restaurant View
+        row = status['data']
         
-    st.sidebar.info(f"🗣️ **의견 (Opinions)**\n\n{row['Review']}")
-    
-    st.sidebar.divider()
-    
-    # Add new opinion
-    with st.sidebar.expander("✍️ 나도 평가하기 (추가 의견)", expanded=False):
-        with st.form("add_review_form"):
-            new_rating = st.slider("내 평점", 0, 100, 80)
-            new_comment = st.text_area("내 의견 (한줄평)", height=80)
-            new_user = st.text_input("내 이름")
-            
-            submit_review = st.form_submit_button("평가 등록")
-            if submit_review:
-                if not new_comment or not new_user:
-                    st.error("의견과 이름을 모두 입력해주세요.")
-                else:
-                    # Update Logic
-                    df = load_data()
-                    # Find index
-                    idx = df[df['Name'] == row['Name']].index
-                    if not idx.empty:
-                        i = idx[0]
-                        current_rating = df.at[i, 'Rating']
-                        current_count = df.at[i, 'RatingCount'] if pd.notna(df.at[i, 'RatingCount']) else 1
-                        current_review = df.at[i, 'Review']
-                        current_recommender = df.at[i, 'Recommender']
-                        
-                        # Calculate New Weighted Average
-                        new_total_rating = (current_rating * current_count) + new_rating
-                        new_count = current_count + 1
-                        updated_rating = new_total_rating / new_count
-                        
-                        # Append Text
-                        updated_review = f"{current_review}\n\n[{new_user}] {new_comment} (⭐{new_rating})"
-                        updated_recommender = f"{current_recommender}, {new_user}" if pd.notna(current_recommender) else new_user
-                        
-                        # Save
-                        # Save to Supabase
-                        try:
-                            row_id = int(df.at[i, 'id'])
-                            payload = {
-                                'rating': float(updated_rating),
-                                'rating_count': int(new_count),
-                                'review': updated_review,
-                                'recommender': updated_recommender
-                            }
-                            supabase.table('restaurants').update(payload).eq('id', row_id).execute()
-                            
-                            # Update local state for immediate feedback
-                            updated_row = df.iloc[i].copy()
-                            updated_row['Rating'] = updated_rating
-                            updated_row['RatingCount'] = new_count
-                            updated_row['Review'] = updated_review
-                            updated_row['Recommender'] = updated_recommender
-                            
-                            st.session_state.selection_status['data'] = updated_row
-                        except Exception as e:
-                            st.error(f"업데이트 실패: {e}")
-                            st.stop()
-                        st.session_state.search_query = "" # Clear search
-                        st.success("소중한 의견이 추가되었습니다!")
-                        st.rerun()
+        with st.container(border=True): # Card Style
+            # Header with Close Button
+            d_col1, d_col2 = st.columns([9, 1])
+            with d_col1:
+                st.subheader(f"🍽️ {row['Name']}")
+                st.caption(f"{row['Cuisine']} | ⭐ {row['Rating']:.1f}점 ({int(row.get('RatingCount', 1))}명 참여)")
+            with d_col2:
+                if st.button("❌", key="close_dashboard_list"):
+                     st.session_state.selection_status = None
+                     st.session_state.selected_lat = None
+                     st.session_state.selected_lon = None
+                     st.session_state.selected_name = None
+                     st.rerun()
 
-    # Old button removed from here
-
-# Case 2: New Location Selected
-elif status and status.get('type') == 'new':
-    # Back Button at Top
-    if st.sidebar.button("⬅️ 뒤로 가기", key="back_btn_new", use_container_width=True):
-        st.session_state.selection_status = None
-        st.session_state.selected_lat = None
-        st.session_state.selected_lon = None
-        st.session_state.selected_name = None
-        st.rerun()
-
-    place = status['data']
-    st.sidebar.markdown(f"### 🏢 {place['place_name']}")
-    st.sidebar.caption(place.get('address_name', ''))
-    
-    st.sidebar.warning(f"🤔 **아직 등록되지 않은 곳입니다! (반경 1km 내)**")
-    st.sidebar.info("이곳을 맛집으로 등록하시겠습니까? 👇")
-    
-    # Old button removed from here
-
-    with st.sidebar.form("add_restaurant_form"):
-        col_name, col_cuisine = st.columns(2)
-        with col_name:
-            name = st.text_input("식당 이름", value=place['place_name'])
-        with col_cuisine:
-            cuisine = st.selectbox("음식 종류", ["한식", "중식", "일식", "양식", "분식", "술집", "기타"])
-        
-        # Removed Price
-        best_menu = st.text_input("맛있었던 메뉴 (Best Menu)")
-        
-        rating = st.slider("평점 (0-100)", 0, 100, 80)
-        review = st.text_area("의견 (자유롭게 기술)", height=100) # Changed label
-        recommender = st.text_input("추천인 이름 (여러 명일 경우 쉼표로 구분)")
-        
-        submitted = st.form_submit_button("맛집 등록하기", use_container_width=True)
-        
-        if submitted:
-            if not name:
-                st.sidebar.error("식당 이름을 입력해주세요.")
-            else:
-                # Save to Supabase
-                db_payload = {
-                    'name': name,
-                    'cuisine': cuisine,
-                    'rating': rating,
-                    'rating_count': 1,
-                    'review': f"[{recommender}] {review} (⭐{rating})",
-                    'location': place.get('address_name', ''),
-                    'latitude': float(place['y']),
-                    'longitude': float(place['x']),
-                    'best_menu': best_menu,
-                    'recommender': recommender
-                }
+            st.markdown(f"**👍 맛있었던 메뉴**: {row['BestMenu']}")
+            if pd.notna(row.get('Recommender')):
+                st.caption(f"💁‍♂️ 추천인: {row['Recommender']}")
                 
-                try:
-                    response = supabase.table('restaurants').insert(db_payload).execute()
-                    if response.data:
-                        # Construct state data from response (includes ID)
-                        inserted = response.data[0]
-                        # Map back to App format
-                        new_data_state = {
-                            'Name': inserted['name'],
-                            'Cuisine': inserted['cuisine'],
-                            'Rating': inserted['rating'],
-                            'RatingCount': inserted['rating_count'],
-                            'Review': inserted['review'],
-                            'Location': inserted['location'],
-                            'Latitude': inserted['latitude'],
-                            'Longitude': inserted['longitude'],
-                            'BestMenu': inserted['best_menu'],
-                            'Recommender': inserted['recommender'],
-                            'id': inserted['id']
-                        }
-                        
-                        st.sidebar.success("맛집이 성공적으로 추가되었습니다! 🎉")
-                        st.session_state.selection_status = {'type': 'existing', 'data': new_data_state}
-                    else:
-                        st.error("데이터 저장 실패 (응답 없음)")
-                except Exception as e:
-                    st.error(f"저장 중 오류가 발생했습니다: {e}")
-                    st.stop()
-                st.session_state.search_query = "" # Clear search
-                st.rerun()
-
-# Case 3: Default (No Selection) -> Search Results OR Stats Summary
-else:
-    # If search query exists, show the list of results
-    if st.session_state.search_query:
-        places = search_kakao_place(st.session_state.search_query)
-        if places:
-            # If ONLY 1 result, auto-select it immediately
-            if len(places) == 1:
-                selected_place = places[0]
-                s_lat = float(selected_place['y'])
-                s_lon = float(selected_place['x'])
+            with st.expander("🗣️ 리뷰 및 평가 보기", expanded=False):
+                st.info(row['Review'])
                 
-                st.session_state.selected_lat = s_lat
-                st.session_state.selected_lon = s_lon
-                st.session_state.selected_name = selected_place['place_name']
-                
-                # Check by Name (Distance check caused errors for neighbors)
-                match_found = None
-                if not df.empty:
-                    matches = df[df['Name'] == selected_place['place_name']]
-                    if not matches.empty:
-                        match_found = matches.iloc[0]
-                
-                if match_found is not None:
-                     st.session_state.selection_status = {'type': 'existing', 'data': match_found}
-                else:
-                     st.session_state.selection_status = {'type': 'new', 'data': selected_place}
-                
-                st.rerun()
-
-            # If multiple results, stick to list
-            else:
-                st.sidebar.markdown(f"### 🔍 검색 결과: '{st.session_state.search_query}'")
-                st.sidebar.caption("아래 목록에서 선택하면 상세 정보를 볼 수 있습니다.")
-                
-                # Limit to Top 10 results to reduce clutter -> Removed by user request
-                # places = places[:10]
-                
-                for i, p in enumerate(places):
-                    # Check registration status for consistent color coding
-                    is_registered_sidebar = False
-                    if not df.empty:
-                         if p['place_name'] in df['Name'].values:
-                             is_registered_sidebar = True
-
-                    emoji = "🔵" if is_registered_sidebar else "🔴"
+                # Review Form
+                st.markdown("---")
+                st.caption("✍️ 나도 평가하기")
+                with st.form("add_review_form_list"):
+                    new_rating = st.slider("내 평점", 0, 100, 80)
+                    new_comment = st.text_area("내 의견 (한줄평)", height=60)
+                    new_user = st.text_input("내 이름")
                     
-                    # Button for each place (with Index and Color)
-                    label = f"{emoji} {i+1}. {p['place_name']} ({p.get('category_group_name', '음식점')})"
-                    if st.sidebar.button(label, key=f"sidebar_btn_{i}", use_container_width=True):
-                        # --- Same Selection Logic as Dropdown ---
-                        selected_place = p
-                        s_lat = float(selected_place['y'])
-                        s_lon = float(selected_place['x'])
-                        
-                        st.session_state.selected_lat = s_lat
-                        st.session_state.selected_lon = s_lon
-                        st.session_state.selected_name = selected_place['place_name']
-                        
-                        # Check by Name (Distance check caused errors for neighbors)
-                        match_found = None
-                        if not df.empty:
-                            matches = df[df['Name'] == selected_place['place_name']]
-                            if not matches.empty:
-                                match_found = matches.iloc[0]
-                        
-                        if match_found is not None:
-                            st.session_state.selection_status = {'type': 'existing', 'data': match_found}
+                    if st.form_submit_button("평가 등록"):
+                        if not new_comment or not new_user:
+                            st.error("이름과 의견을 입력해주세요.")
                         else:
-                            st.session_state.selection_status = {'type': 'new', 'data': selected_place}
-                        
-                        st.rerun()
-        else:
-             st.sidebar.warning("검색 결과가 없습니다.")
-             if st.sidebar.button("검색 초기화", use_container_width=True):
-                st.session_state.search_query = ""
-                st.rerun()
+                            try:
+                                # Reload fresh DF
+                                fresh_df = load_data() 
+                                target_row = fresh_df[fresh_df['Name'] == row['Name']].iloc[0]
+                                
+                                row_id = int(target_row['id'])
+                                current_rating = target_row['Rating']
+                                current_count = target_row['RatingCount'] if pd.notna(target_row['RatingCount']) else 1
+                                current_review = target_row['Review']
+                                current_recommender = target_row['Recommender']
+                                
+                                new_total_rating = (current_rating * current_count) + new_rating
+                                new_count = current_count + 1
+                                updated_rating = new_total_rating / new_count
+                                
+                                updated_review = f"{current_review}\n\n[{new_user}] {new_comment} (⭐{new_rating})"
+                                updated_recommender = f"{current_recommender}, {new_user}" if pd.notna(current_recommender) else f"{new_user}"
+                                
+                                payload = {
+                                    'rating': float(updated_rating),
+                                    'rating_count': int(new_count),
+                                    'review': updated_review,
+                                    'recommender': updated_recommender
+                                }
+                                supabase.table('restaurants').update(payload).eq('id', row_id).execute()
+                                
+                                # Update Local State
+                                row['Rating'] = updated_rating
+                                row['RatingCount'] = new_count
+                                row['Review'] = updated_review
+                                row['Recommender'] = updated_recommender
+                                st.session_state.selection_status['data'] = row
+                                st.success("평가가 등록되었습니다!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"오류 발생: {e}")
 
-    # If no search query, check category filter
-    elif st.session_state.selected_category != "전체":
-        cat_df = df[df['Cuisine'] == st.session_state.selected_category]
-        st.sidebar.markdown(f"### 🥣 {st.session_state.selected_category} 맛집 리스트")
+    elif status and status.get('type') == 'new':
+        # New Restaurant Registration View
+        item = status['data']
         
-        if not cat_df.empty:
-            st.sidebar.caption(f"총 {len(cat_df)}곳이 등록되어 있습니다.")
-            for i, (idx, row) in enumerate(cat_df.iterrows()):
-                # Display average rating and count
-                rating_info = f"⭐{row['Rating']:.1f}"
-                label = f"{i+1}. {row['Name']} ({rating_info})"
+        with st.container(border=True):
+            d_col1, d_col2 = st.columns([9, 1])
+            with d_col1:
+                st.subheader(f"📍 {item['name']}")
+                st.caption(item.get('address', '위치 정보 없음'))
+            with d_col2:
+                 if st.button("❌", key="close_new_dash_list"):
+                     st.session_state.selection_status = None
+                     st.session_state.selected_lat = None
+                     st.session_state.selected_lon = None
+                     st.session_state.selected_name = None
+                     st.rerun()
+
+            st.info("이 장소를 맛집으로 등록하시겠습니까?")
+            
+            with st.form("add_rest_form_list"):
+                col_f1, col_f2 = st.columns(2)
+                with col_f1:
+                    name = st.text_input("식당 이름", value=item['name'])
+                    cuisine = st.selectbox("카테고리", ["한식", "중식", "일식", "양식", "분식", "술집", "기타"], key="new_cuisine")
+                with col_f2:
+                    rating = st.slider("평점", 0, 100, 80, key="new_rating")
                 
-                if st.sidebar.button(label, key=f"cat_res_btn_{idx}", use_container_width=True):
+                best_menu = st.text_input("추천 메뉴", key="new_menu")
+                review = st.text_area("한줄평", placeholder="오징어볶음이 정말 맛있어요!", key="new_review")
+                recommender = st.text_input("추천인 이름", key="new_rec")
+                
+                if st.form_submit_button("맛집 등록하기"):
+                    if not recommender or not review:
+                        st.error("추천인과 한줄평은 필수입니다!")
+                    else:
+                        db_payload = {
+                            'name': name,
+                            'cuisine': cuisine,
+                            'rating': rating,
+                            'rating_count': 1,
+                            'review': f"[{recommender}] {review} (⭐{rating})",
+                            'location': item.get('address', ''),
+                            'latitude': float(item['lat']),
+                            'longitude': float(item['lng']),
+                            'best_menu': best_menu,
+                            'recommender': recommender
+                        }
+                        try:
+                            resp = supabase.table('restaurants').insert(db_payload).execute()
+                            if resp.data:
+                                 st.success(f"{name} 등록 완료!")
+                                 st.session_state.selection_status = None
+                                 st.session_state.search_query = ""
+                                 st.rerun()
+                            else:
+                                st.error("데이터 저장 실패")
+                        except Exception as e:
+                            st.error(f"저장 중 오류: {e}")
+
+    # B. List View (Always Visible unless search active but map handles that too)
+    # Similar to Sidebar List - Compact buttons
+    if not filtered_df.empty:
+        st.markdown(f"**📋 맛집 리스트 ({len(filtered_df)}곳)**")
+        
+        # Use simple iteration for buttons
+        # If too many items, utilize pagination or scroll (Streamlit native scrolling is automatic inside container)
+        
+        # To mimic sidebar style clearly:
+        list_container = st.container(height=300, border=False) # Fixed height with scroll
+        
+        with list_container:
+            # Header (Simple text guide)
+            st.caption("🏠식당명(10) | 종류(5) | 평점 | 메뉴")
+
+            for i, (idx, row) in enumerate(filtered_df.iterrows()):
+                # Prepare Actionable Button Label with Monospace Alignment
+                # 1. Name (Truncate to 10 chars)
+                name_val = row['Name']
+                if len(name_val) > 8:
+                    name_val = name_val[:7] + ".."
+                
+                # 2. Cuisine (Truncate to 4)
+                cuisine_val = row['Cuisine'][:4]
+                
+                # 3. Menu (Truncate rest)
+                menu_val = row['BestMenu'] if pd.notna(row['BestMenu']) else ""
+                if len(menu_val) > 10:
+                    menu_val = menu_val[:9] + ".."
+                    
+                # Format: Use fixed width padding
+                # Name (10) | Cuisine (5) | Rating (5) | Spacing | Menu
+                rating_val = f"{row['Rating']:.1f}"
+                
+                # Using simple spaces for alignment since we enforced monospace
+                # Added extra spaces before menu_val
+                label = f"{name_val:<10} {cuisine_val:<5} ⭐{rating_val:<4}    {menu_val}"
+                
+                is_selected = (status and status.get('data', {}).get('Name') == row['Name'])
+                btn_type = "primary" if is_selected else "secondary"
+                
+                if st.button(label, key=f"list_btn_{idx}", type=btn_type, use_container_width=True):
                      st.session_state.selection_status = {'type': 'existing', 'data': row}
                      st.session_state.selected_lat = row['Latitude']
                      st.session_state.selected_lon = row['Longitude']
                      st.session_state.selected_name = row['Name']
                      st.rerun()
-        else:
-            st.sidebar.info("해당 카테고리에 등록된 맛집이 없습니다.")
-
-    # If no search query and no category filter, show stats
     else:
-        st.sidebar.markdown("### 📊 현재 등록 현황")
-        if not df.empty:
-            total_count = len(df)
-            st.sidebar.write(f"**총 {total_count}곳**의 맛집이 등록되어 있습니다.")
-            
-            # Simplified Stats
-            cat_counts = df['Cuisine'].value_counts()
-            stats_text = []
-            st.sidebar.caption(", ".join(stats_text))
-            
-            st.sidebar.divider()
-            st.sidebar.markdown("### 📋 전체 맛집 리스트")
-            st.sidebar.caption(f"등록된 모든 맛집을 확인하세요. ({total_count}곳)")
-            
-            # Sort by name for easier scanning? Or maybe Rating? Name is standard for directory.
-            sorted_df = df.sort_values(by='Name')
-            
-            for i, (idx, row) in enumerate(sorted_df.iterrows()):
-                # Display name and rating
-                rating_info = f"⭐{row['Rating']:.1f}"
-                label = f"{i+1}. {row['Name']} ({row['Cuisine']} | {rating_info})"
-                
-                # Use original index for key to be safe
-                if st.sidebar.button(label, key=f"all_res_btn_{idx}", use_container_width=True):
-                     st.session_state.selection_status = {'type': 'existing', 'data': row}
-                     st.session_state.selected_lat = row['Latitude']
-                     st.session_state.selected_lon = row['Longitude']
-                     st.session_state.selected_name = row['Name']
-                     st.rerun()
+        st.info("조건에 맞는 맛집이 없습니다.")
 
-        else:
-            st.sidebar.info("아직 등록된 맛집이 없습니다. 첫번째 등록자가 되어주세요!")
+
+
+# --- 3. Map Section ---
+st.markdown("### 🗺️ 지도")
+
+# Prepare Map Data
+# Company Marker
+company_marker = {
+    "lat": DEFAULT_LAT,
+    "lng": DEFAULT_LON,
+    "name": "Xi S&D",
+    "type": "company"
+}
+
+restaurant_markers = []
+# If search query, show search markers (handled in JS logic mostly, but passed here)
+# If NO search query, show filtered_df markers
+if not st.session_state.search_query and not filtered_df.empty:
+    for _, row in filtered_df.iterrows():
+        if pd.notna(row['Latitude']) and pd.notna(row['Longitude']):
+            is_winner = (row['Name'] == st.session_state.winner)
+            marker_data = {
+                "lat": row['Latitude'],
+                "lng": row['Longitude'],
+                "name": row['Name'],
+                "cuisine": row['Cuisine'],
+                "rating": row['Rating'],
+                "bestMenu": row['BestMenu'],
+                "price": row['Price'] if pd.notna(row['Price']) else "-",
+                "isWinner": is_winner
+            }
+            restaurant_markers.append(marker_data)
+
+# Selected Marker
+selected_marker = None
+if st.session_state.selected_lat:
+    selected_marker = {
+        "lat": st.session_state.selected_lat,
+        "lng": st.session_state.selected_lon,
+        "name": st.session_state.selected_name or "선택된 위치"
+    }
+
+# Center Logic
+center_lat = st.session_state.selected_lat if st.session_state.selected_lat else (df['Latitude'].mean() if not df.empty else DEFAULT_LAT)
+center_lon = st.session_state.selected_lon if st.session_state.selected_lon else (df['Longitude'].mean() if not df.empty else DEFAULT_LON)
+
+# JavaScript Template
+js_key = st.session_state.get('kakao_js_api_key', DEFAULT_JS_API_KEY) # Ensure key name matches global
+
+kakao_map_html = f"""
+<!-- Map Container -->
+<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
+<div id="map" style="width:100%; height:600px; border:1px solid #ccc; touch-action: none;"></div>
+
+<script>
+    function initMap() {{
+        if (typeof kakao === 'undefined') {{ return; }}
+
+        kakao.maps.load(function() {{
+            var container = document.getElementById('map');
+            var options = {{
+                center: new kakao.maps.LatLng({center_lat}, {center_lon}),
+                level: 3
+            }};
+
+            var map = new kakao.maps.Map(container, options);
+            
+            // --- Markers Logic (Same as before) ---
+            var company = {json.dumps(company_marker)};
+            var restaurants = {json.dumps(restaurant_markers)};
+            var selected = {json.dumps(selected_marker)};
+            var searchResults = {json.dumps(search_markers)};
+            var activeInfoWindow = null;
+
+            // 1. Company
+             var companyOverlay = new kakao.maps.CustomOverlay({{
+                position: new kakao.maps.LatLng(company.lat, company.lng),
+                content: '<div style="font-size:60px; text-shadow: 2px 2px 5px rgba(0,0,0,0.3); cursor: pointer;">🏢</div>',
+                yAnchor: 0.3,
+                zIndex: 9
+            }});
+            companyOverlay.setMap(map);
+
+            // 2. Restaurants
+            var standardBlue = "https://maps.google.com/mapfiles/ms/icons/blue-dot.png";
+            restaurants.forEach(function(place) {{
+                var marker = new kakao.maps.Marker({{
+                    map: map,
+                    position: new kakao.maps.LatLng(place.lat, place.lng),
+                    title: place.name,
+                    image: new kakao.maps.MarkerImage(standardBlue, new kakao.maps.Size(32, 32))
+                }});
+                
+                var content = '<div style="padding:5px;width:150px;font-size:12px;"><b>' + place.name + '</b><br>⭐ ' + place.rating + '</div>';
+                var iw = new kakao.maps.InfoWindow({{ content: content, removable: true }});
+                
+                kakao.maps.event.addListener(marker, 'click', function() {{
+                    if (activeInfoWindow) activeInfoWindow.close();
+                    iw.open(map, marker);
+                    activeInfoWindow = iw;
+                }});
+            }});
+
+            // 3. Search Results
+            searchResults.forEach(function(place, i) {{
+                var color = place.isRegistered ? 'blue' : 'red';
+                var imageSrc = 'https://raw.githubusercontent.com/Concept211/Google-Maps-Markers/master/images/marker_' + color + (i+1) + '.png';
+                var marker = new kakao.maps.Marker({{
+                    map: map,
+                    position: new kakao.maps.LatLng(place.lat, place.lng),
+                    image: new kakao.maps.MarkerImage(imageSrc, new kakao.maps.Size(22, 40)),
+                     zIndex: place.isRegistered ? 5 : 3
+                }});
+                
+                var infoContent = '<div style="padding:5px;width:150px;font-size:12px;"><b>' + place.name + '</b><br>' + (place.isRegistered ? '✅ 등록됨' : '👉 미등록') + '</div>';
+                var iw = new kakao.maps.InfoWindow({{ content: infoContent, removable: true }});
+                 kakao.maps.event.addListener(marker, 'click', function() {{
+                    if (activeInfoWindow) activeInfoWindow.close();
+                    iw.open(map, marker);
+                    activeInfoWindow = iw;
+                }});
+            }});
+            
+             // 4. Selected Marker 
+            if (selected) {{
+                var marker = new kakao.maps.Marker({{
+                    map: map,
+                    position: new kakao.maps.LatLng(selected.lat, selected.lng),
+                    zIndex: 10
+                }});
+                 var infowindow = new kakao.maps.InfoWindow({{
+                    content: '<div style="padding:5px;width:150px;font-size:13px;"><b>' + selected.name + '</b><br><span style="color:red;">📍 선택됨</span></div>'
+                }});
+                infowindow.open(map, marker);
+            }}
+
+            var zoomControl = new kakao.maps.ZoomControl();
+            map.addControl(zoomControl, kakao.maps.ControlPosition.RIGHT);
+        }});
+    }}
+</script>
+
+<script type="text/javascript" 
+        src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={js_key}&libraries=services&autoload=false"
+        onload="initMap()"></script>
+"""
+
+# Render Map (Fixed Height for Mobile ~60% Screen)
+components.html(kakao_map_html, height=620)
+
+
+
+
+# (Optional) Footer or Spacer if needed, otherwise empty.
