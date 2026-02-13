@@ -111,7 +111,7 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     return R * c * 1000
 
 # --- State Init ---
-if 'active_category' not in st.session_state: st.session_state.active_category = None
+if 'active_category' not in st.session_state: st.session_state.active_category = "전체" # Default to Open "All"
 if 'sort_option' not in st.session_state: st.session_state.sort_option = 'Rating'
 if 'search_query' not in st.session_state: st.session_state.search_query = ""
 if 'selection_status' not in st.session_state: st.session_state.selection_status = None
@@ -128,6 +128,15 @@ with col_h1:
 with col_h2:
     if st.button("🎲 랜덤"):
         if not df.empty:
+            # Roulette Animation
+            placeholder = st.empty()
+            names = df['Name'].tolist()
+            delay = 0.05
+            for i in range(15):
+                placeholder.markdown(f"<div style='text-align:center; font-size:18px; font-weight:bold; color:#666;'>🎲 {random.choice(names)}</div>", unsafe_allow_html=True)
+                if i > 8: delay += 0.03
+                time.sleep(delay)
+            
             winner = df.sample(1).iloc[0]
             st.session_state.winner = winner['Name']
             st.session_state.active_category = winner['Cuisine'] # Open that category
