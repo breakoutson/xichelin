@@ -44,43 +44,37 @@ st.set_page_config(page_title="회사 점심 지도", page_icon="🍽️", layou
 # CSS 주입: 모바일 레이아웃 강제 조정 (가로 스크롤/한줄 정렬)
 st.markdown("""
     <style>
-    /* 모바일 환경 (768px 이하)에서 컬럼 강제 가로 정렬 */
+    /* 모바일 환경 (768px 이하)에서 컬럼 강제 조정 */
     @media (max-width: 768px) {
-        /* 컬럼 컨테이너: 가로 방향 유지, 줄바꿈 금지, 가로 스크롤 허용 */
+        /* 컬럼 컨테이너: 줄바꿈 허용 (여러 줄로 표시), 간격 축소 */
         div[data-testid="stHorizontalBlock"] {
              flex-direction: row !important;
-             flex-wrap: nowrap !important;
-             overflow-x: auto !important;
-             gap: 5px !important;
-             padding-bottom: 5px; /* 스크롤바 공간 */
+             flex-wrap: wrap !important;  /* 줄바꿈 허용 */
+             gap: 4px !important;        /* 간격 최소화 */
+             padding-bottom: 0px !important;
         }
         
-        /* 개별 컬럼: 내용물 크기에 맞게 자동 조절 (비율 무시) */
+        /* 개별 컬럼: 내용물 크기에 비례하지만, 너무 넓어지지 않게 */
         div[data-testid="column"] {
-            flex: 0 0 auto !important;
+            flex: 1 1 auto !important;  /* 남는 공간 채우기 */
             width: auto !important;
-            min-width: auto !important; 
+            min-width: 20px !important; /* 너무 작아짐 방지 */
         }
         
-        /* 버튼 스타일: 컴팩트하게, 강제 한줄 표시 */
+        /* 버튼 스타일: 꽉 찬 느낌으로 */
         div.stButton > button {
-            width: auto !important; /* 버튼 내용만큼만 차지 */
-            padding: 4px 8px !important; /* 내부 여백 축소 */
-            font-size: 13px !important; /* 글자 크기 축소 */
-            white-space: nowrap !important; /* 줄바꿈 금지 */
+            width: 100% !important;     /* 컬럼을 가득 채움 */
+            padding: 4px 2px !important; /* 내부 여백 극소화 */
+            font-size: 12px !important; /* 글자 크기 더 축소 */
+            white-space: nowrap !important;
             height: auto !important;
-            min-height: 0px !important;
-        }
-        
-        /* 리스트 내부의 텍스트가 잘리지 않게 조정 */
-        p, div {
-             font-size: 13px !important;
+            min-height: 30px !important;
         }
     }
     
     /* PC/전체 공통: 버튼 텍스트 정렬 */
     div.stButton > button {
-        text-align: left; /* 좌측 정렬 복구 */
+        text-align: center; /* 버튼 텍스트 중앙 정렬 (깔끔하게) */
     }
     </style>
     """, unsafe_allow_html=True)
