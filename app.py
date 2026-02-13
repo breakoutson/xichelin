@@ -17,13 +17,19 @@ import random
 import requests
 from supabase import create_client, Client
 
-# Kakao API Key (Load from .env or st.secrets)
-DEFAULT_REST_API_KEY = os.getenv("KAKAO_REST_API_KEY")
-DEFAULT_JS_API_KEY = os.getenv("KAKAO_JS_API_KEY")
+# Helper function to get secrets/env
+def get_secret(key):
+    if key in st.secrets:
+        return st.secrets[key]
+    return os.getenv(key)
+
+# Kakao API Key
+DEFAULT_REST_API_KEY = get_secret("KAKAO_REST_API_KEY")
+DEFAULT_JS_API_KEY = get_secret("KAKAO_JS_API_KEY")
 
 # Check if keys are loaded
 if not DEFAULT_REST_API_KEY or not DEFAULT_JS_API_KEY:
-    st.error("API Key가 설정되지 않았습니다. .env 파일을 확인해주세요!")
+    st.error("API Key가 설정되지 않았습니다. .env 파일 또는 Streamlit Secrets를 확인해주세요!")
 
 
 # Configuration
@@ -32,20 +38,20 @@ st.set_page_config(page_title="회사 점심 지도", page_icon="🍽️", layou
 
 DATA_DIR = 'data'
 DATA_FILE = os.path.join(DATA_DIR, 'restaurants.csv')
-DEFAULT_LAT = 37.5617864  # Namsan Square (Xi S&D) - Corrected
+DEFAULT_LAT = 37.5617864  # Namsan Square (Xi S&D)
 DEFAULT_LON = 126.9910438
 
 # Ensure data directory exists
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Supabase Setup
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_URL = get_secret("SUPABASE_URL")
+SUPABASE_KEY = get_secret("SUPABASE_KEY")
 
 @st.cache_resource
 def init_supabase():
     if not SUPABASE_URL or not SUPABASE_KEY:
-        st.warning("Supabase URL or Key not found in .env")
+        # st.warning("Supabase URL or Key not found in .env or secrets")
         return None
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -94,13 +100,13 @@ def save_data(df):
     # Keeping this pass to prevent immediate crashes before refactoring call sites.
     pass
 
-# Helper: Get current REST API Key
-def get_rest_api_key():
-    return st.session_state.get('rest_api_key', DEFAULT_REST_API_KEY)
+# Helper: Get current REST API Key (Deprecated logic removed, using global var)
+# def get_rest_api_key():
+#     return st.session_state.get('rest_api_key', DEFAULT_REST_API_KEY)
 
 def search_kakao_place(keyword):
     url = "https://dapi.kakao.com/v2/local/search/keyword.json"
-    headers = {"Authorization": f"KakaoAK {get_rest_api_key()}"}
+    headers = {"Authorization": f"KakaoAK {DEFAULT_REST_API_KEY}"}
     params = {
         "query": keyword, 
         "size": 15,
@@ -139,7 +145,7 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 
 def get_kakao_address(lat, lon):
     url = "https://dapi.kakao.com/v2/local/geo/coord2address.json"
-    headers = {"Authorization": f"KakaoAK {get_rest_api_key()}"}
+    headers = {"Authorization": f"KakaoAK {DEFAULT_REST_API_KEY}"}
     params = {"x": lon, "y": lat}
     try:
         response = requests.get(url, headers=headers, params=params)

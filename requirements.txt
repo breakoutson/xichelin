@@ -1,7 +1,7 @@
 streamlit
 pandas
 folium
-folium
 streamlit-folium
 requests
 python-dotenv
+supabase
