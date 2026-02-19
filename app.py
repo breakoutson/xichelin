@@ -171,87 +171,66 @@ if st.session_state.search_query:
     # --- SEARCH RESULTS SECTION ---
     if st.button(f"🔍 '{st.session_state.search_query}' 검색 결과 (클릭하여 닫기)", type="primary", use_container_width=True):
         st.session_state.search_query = ""
-        st.session_state.active_category = None
+        st.session_state.active_category = "전체"
         st.rerun()
     
     # Filter content
-    filtered = df[
+    target_df = df[
         df['Name'].str.contains(st.session_state.search_query) | 
         df['Cuisine'].str.contains(st.session_state.search_query) |
         df['BestMenu'].str.contains(st.session_state.search_query, na=False)
     ]
-    # 1. Sort Controls (Inside Search)
-    s_col1, s_col2, s_col3 = st.columns(3)
-    current_sort = st.session_state.sort_option
     
-    if s_col1.button("⭐ 평점순", key="sort_rate_search", type="primary" if current_sort=='Rating' else "secondary", use_container_width=True):
-        st.session_state.sort_option = 'Rating'
-        st.rerun()
-    if s_col2.button("📏 거리순", key="sort_dist_search", type="primary" if current_sort=='Distance' else "secondary", use_container_width=True):
-        st.session_state.sort_option = 'Distance'
-        st.rerun()
-    if s_col3.button("🆕 최신순", key="sort_new_search", type="primary" if current_sort=='Newest' else "secondary", use_container_width=True):
-        st.session_state.sort_option = 'Newest'
-        st.rerun()
+    # 1. Sort Controls (Hidden in Expander)
+    with st.expander("🌪️ 정렬 & 필터", expanded=False):
+        s_col1, s_col2, s_col3 = st.columns(3)
+        current_sort = st.session_state.sort_option
+        if s_col1.button("⭐ 평점순", key="sort_rate_search", type="primary" if current_sort=='Rating' else "secondary", use_container_width=True):
+            st.session_state.sort_option = 'Rating'; st.rerun()
+        if s_col2.button("📏 거리순", key="sort_dist_search", type="primary" if current_sort=='Distance' else "secondary", use_container_width=True):
+            st.session_state.sort_option = 'Distance'; st.rerun()
+        if s_col3.button("🆕 최신순", key="sort_new_search", type="primary" if current_sort=='Newest' else "secondary", use_container_width=True):
+            st.session_state.sort_option = 'Newest'; st.rerun()
 
     # Sort Logic
-    target_df = filtered.copy()
-    if st.session_state.sort_option == 'Rating':
-        target_df = target_df.sort_values(by='Rating', ascending=False)
-    elif st.session_state.sort_option == 'Newest':
-        target_df = target_df.sort_values(by='id', ascending=False)
+    if st.session_state.sort_option == 'Rating': target_df = target_df.sort_values(by='Rating', ascending=False)
+    elif st.session_state.sort_option == 'Newest': target_df = target_df.sort_values(by='id', ascending=False)
     elif st.session_state.sort_option == 'Distance':
-        def _calc(r):
-            if pd.isna(r['Latitude']): return 99999
-            return calculate_distance(DEFAULT_LAT, DEFAULT_LON, r['Latitude'], r['Longitude'])
-        target_df['Distance'] = target_df.apply(_calc, axis=1)
-        target_df = target_df.sort_values(by='Distance', ascending=True)
+         def _calc(r):
+             if pd.isna(r['Latitude']): return 99999
+             return calculate_distance(DEFAULT_LAT, DEFAULT_LON, r['Latitude'], r['Longitude'])
+         target_df['Distance'] = target_df.apply(_calc, axis=1)
+         target_df = target_df.sort_values(by='Distance', ascending=True)
 
-    # 1-B. Detail View (Search)
+    # 2. Detail View (Search)
     s_status = st.session_state.selection_status
+    selected_name = None
     if s_status and s_status.get('type') == 'existing':
         d_row = s_status['data']
+        selected_name = d_row['Name']
         with st.container(border=True):
             st.subheader(f"🍽️ {d_row['Name']}")
             st.caption(f"⭐ {d_row['Rating']:.1f} | {d_row['BestMenu']}")
+            st.info(d_row['Review'])
             if st.button("닫기", key="close_search_detail"):
                 st.session_state.selection_status = None
                 st.rerun()
-            st.info(d_row['Review'])
 
-    # 2. List View
-    if not target_df.empty:
-        st.caption(f"📋 검색 결과 ({len(target_df)}곳)")
-        with st.container(height=300):
-            for _, row in target_df.iterrows():
-                n = row['Name']
-                if len(n)>8: n = n[:7]+".."
-                c = row['Cuisine'][:4]
-                r = f"{row['Rating']:.1f}"
-                m = row['BestMenu'] if pd.notna(row['BestMenu']) else ""
-                
-                label = f"{n} | {c} | ⭐{r} | {m}"
-                
-                # Selection Hook
-                is_sel = (st.session_state.selection_status and st.session_state.selection_status.get('data', {}).get('Name') == row['Name'])
-                
-                if st.button(label, key=f"btn_search_{row['id']}", type="primary" if is_sel else "secondary", use_container_width=True):
-                    st.session_state.selection_status = {'type': 'existing', 'data': row}
-                    st.session_state.selected_lat = row['Latitude']
-                    st.session_state.selected_lon = row['Longitude']
-                    st.rerun()
-    else:
-        st.info("검색 결과가 없습니다.")
-        
-    # 3. Map (Below List)
+    # 3. Map (Below Info)
+    # Internal Markers
     map_markers = []
     for _, row in target_df.iterrows():
         if pd.notna(row['Latitude']):
             map_markers.append({"lat": row['Latitude'], "lng": row['Longitude'], "name": row['Name'], "rating": row['Rating']})
     
-    # Add Kakao Search Results (Red Markers) if any?
+    if selected_name:
+        map_markers = [m for m in map_markers if m['name'] == selected_name]
+    
+    # External Markers
     try:
         kakao_res = search_kakao_place(st.session_state.search_query)
+        if selected_name: # Filter external too if selected
+            kakao_res = [p for p in kakao_res if p['place_name'] == selected_name]
     except:
         kakao_res = []
         
@@ -259,176 +238,215 @@ if st.session_state.search_query:
     for p in kakao_res:
          search_markers.append({"lat": float(p['y']), "lng": float(p['x']), "name": p['place_name']})
     
-    c_lat = st.session_state.selected_lat or DEFAULT_LAT
-    c_lon = st.session_state.selected_lon or DEFAULT_LON
+    c_lat = DEFAULT_LAT
+    c_lon = DEFAULT_LON
     
     map_id = "map_search"
     html = f"""
+    <!-- Load SDK with autoload=false -->
+    <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={DEFAULT_JS_API_KEY}&libraries=services&autoload=false"></script>
+    
     <div id="{map_id}" style="width:100%; height:350px;"></div>
     <script>
-        if (typeof kakao !== 'undefined') {{
-            kakao.maps.load(function() {{
-                var container = document.getElementById('{map_id}');
-                var options = {{ center: new kakao.maps.LatLng({c_lat}, {c_lon}), level: 5 }};
-                var map = new kakao.maps.Map(container, options);
-                
-                new kakao.maps.CustomOverlay({{
-                    position: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LON}),
-                    content: '<div style="font-size:30px;">🏢</div>',
-                    map: map
+        var checkKakaoSearch = setInterval(function() {{
+            if (typeof kakao !== 'undefined' && kakao.maps) {{
+                clearInterval(checkKakaoSearch);
+                kakao.maps.load(function() {{
+                    var container = document.getElementById('{map_id}');
+                    
+                    var storedLevel = sessionStorage.getItem('map_zoom_' + '{map_id}');
+                    var level = storedLevel ? parseInt(storedLevel) : 5;
+                    
+                    var options = {{ center: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LON}), level: level }};
+                    var map = new kakao.maps.Map(container, options);
+                    
+                    kakao.maps.event.addListener(map, 'zoom_changed', function() {{
+                        sessionStorage.setItem('map_zoom_' + '{map_id}', map.getLevel());
+                    }});
+                    
+                    new kakao.maps.CustomOverlay({{
+                        position: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LON}),
+                        content: '<div style="font-size:30px;">🏢</div>',
+                        map: map
+                    }});
+                    
+                    // Filtered Results
+                    var places = {json.dumps(map_markers)};
+                    var selectedName = "{selected_name if selected_name else ''}";
+
+                    places.forEach(function(p) {{
+                        var m = new kakao.maps.Marker({{ map: map, position: new kakao.maps.LatLng(p.lat, p.lng), title: p.name }});
+                        var iw = new kakao.maps.InfoWindow({{ content: '<div style="padding:5px;">' + p.name + '</div>' }});
+                        kakao.maps.event.addListener(m, 'click', function() {{ iw.open(map, m); }});
+                        if (p.name === selectedName) iw.open(map, m);
+                    }});
+                    
+                    // Kakao Search Results (Red)
+                    var searchM = {json.dumps(search_markers)};
+                    searchM.forEach(function(p) {{
+                         var img = 'https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png';
+                         var m = new kakao.maps.Marker({{ map: map, position: new kakao.maps.LatLng(p.lat, p.lng), image: new kakao.maps.MarkerImage(img, new kakao.maps.Size(24, 35)) }});
+                         var iw = new kakao.maps.InfoWindow({{ content: '<div style="padding:5px; color:red;">' + p.name + ' (외부검색)</div>' }});
+                         kakao.maps.event.addListener(m, 'click', function() {{ iw.open(map, m); }});
+                    }});
                 }});
-                
-                var places = {json.dumps(map_markers)};
-                places.forEach(function(p) {{
-                    var m = new kakao.maps.Marker({{ map: map, position: new kakao.maps.LatLng(p.lat, p.lng), title: p.name }});
-                    var iw = new kakao.maps.InfoWindow({{ content: '<div style="padding:5px;">' + p.name + '</div>' }});
-                    kakao.maps.event.addListener(m, 'click', function() {{ iw.open(map, m); }});
-                }});
-                
-                var searchM = {json.dumps(search_markers)};
-                searchM.forEach(function(p) {{
-                     var img = 'https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png';
-                     var m = new kakao.maps.Marker({{ map: map, position: new kakao.maps.LatLng(p.lat, p.lng), image: new kakao.maps.MarkerImage(img, new kakao.maps.Size(24, 35)) }});
-                     var iw = new kakao.maps.InfoWindow({{ content: '<div style="padding:5px; color:red;">' + p.name + ' (외부검색)</div>' }});
-                     kakao.maps.event.addListener(m, 'click', function() {{ iw.open(map, m); }});
-                }});
-            }});
-        }}
+            }}
+        }}, 100);
     </script>
-    <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={DEFAULT_JS_API_KEY}&libraries=services&autoload=false"></script>
     """
     components.html(html, height=370)
-    
-else:
-    # --- CATEGORY BUTTONS ---
-    for cat in categories:
-        # Determine if this category is open
-        is_open = (st.session_state.active_category == cat)
-        icon = "📂" if is_open else "📁"
-        btn_type = "primary" if is_open else "secondary"
-        
-        # Accordion Header Button
-        if st.button(f"{icon} {cat}", key=f"cat_btn_{cat}", type=btn_type, use_container_width=True):
-            if is_open:
-                st.session_state.active_category = None # Toggle Close
-            else:
-                st.session_state.active_category = cat # Toggle Open
-            st.rerun()
-            
-        # Accordion Content (List + Map)
-        if is_open:
-            # 1. Sort Controls (Inside Accordion)
-            s_col1, s_col2, s_col3 = st.columns(3)
-            current_sort = st.session_state.sort_option
-            
-            if s_col1.button("⭐ 평점순", key=f"sort_rate_{cat}", type="primary" if current_sort=='Rating' else "secondary", use_container_width=True):
-                st.session_state.sort_option = 'Rating'
-                st.rerun()
-            if s_col2.button("📏 거리순", key=f"sort_dist_{cat}", type="primary" if current_sort=='Distance' else "secondary", use_container_width=True):
-                st.session_state.sort_option = 'Distance'
-                st.rerun()
-            if s_col3.button("🆕 최신순", key=f"sort_new_{cat}", type="primary" if current_sort=='Newest' else "secondary", use_container_width=True):
-                st.session_state.sort_option = 'Newest'
-                st.rerun()
 
-            # 2. Filter Data
+    # 4. List View
+    if not target_df.empty:
+        st.caption(f"📋 등록된 맛집 ({len(target_df)}곳)")
+        with st.container(height=250):
+            for _, row in target_df.iterrows():
+                n = row['Name']; c = row['Cuisine'][:4]; r = f"{row['Rating']:.1f}"
+                m = row['BestMenu'] if pd.notna(row['BestMenu']) else ""
+                label = f"{n} | {c} | ⭐{r} | {m}"
+                is_sel = (selected_name == row['Name'])
+                if st.button(label, key=f"btn_search_{row['id']}", type="primary" if is_sel else "secondary", use_container_width=True):
+                    st.session_state.selection_status = {'type': 'existing', 'data': row}
+                    st.session_state.selected_lat = row['Latitude']
+                    st.session_state.selected_lon = row['Longitude']
+                    st.rerun()
+    else:
+        st.info("등록된 맛집 검색 결과가 없습니다.")
+        
+    st.markdown("---")
+
+else:
+    # --- CATEGORY TABS (Scrollable Layout) ---
+    st.markdown("### 📂 카테고리")
+    tabs = st.tabs(categories)
+    
+    for cat, tab in zip(categories, tabs):
+        with tab:
+            # 1. Filter Data
             target_df = df.copy()
             if cat != "전체":
                 target_df = target_df[target_df['Cuisine'] == cat]
-                
-            # Sort
-            if st.session_state.sort_option == 'Rating':
+            
+            # 2. Sort Controls (Hidden in Expander)
+            with st.expander("🌪️ 정렬 & 필터", expanded=False):
+                s_col1, s_col2, s_col3 = st.columns(3)
+                current_sort = st.session_state.sort_option
+                if s_col1.button("⭐ 평점순", key=f"sort_rate_{cat}", type="primary" if current_sort=='Rating' else "secondary", use_container_width=True):
+                    st.session_state.sort_option = 'Rating'; st.rerun()
+                if s_col2.button("📏 거리순", key=f"sort_dist_{cat}", type="primary" if current_sort=='Distance' else "secondary", use_container_width=True):
+                    st.session_state.sort_option = 'Distance'; st.rerun()
+                if s_col3.button("🆕 최신순", key=f"sort_new_{cat}", type="primary" if current_sort=='Newest' else "secondary", use_container_width=True):
+                    st.session_state.sort_option = 'Newest'; st.rerun()
+            
+            # Apply Sort
+            if st.session_state.sort_option == 'Rating': 
                 target_df = target_df.sort_values(by='Rating', ascending=False)
-            elif st.session_state.sort_option == 'Newest':
+            elif st.session_state.sort_option == 'Newest': 
                 target_df = target_df.sort_values(by='id', ascending=False)
             elif st.session_state.sort_option == 'Distance':
-                def _calc(r):
-                    if pd.isna(r['Latitude']): return 99999
-                    return calculate_distance(DEFAULT_LAT, DEFAULT_LON, r['Latitude'], r['Longitude'])
-                target_df['Distance'] = target_df.apply(_calc, axis=1)
-                target_df = target_df.sort_values(by='Distance', ascending=True)
+                 def _calc(r):
+                     if pd.isna(r['Latitude']): return 99999
+                     return calculate_distance(DEFAULT_LAT, DEFAULT_LON, r['Latitude'], r['Longitude'])
+                 target_df['Distance'] = target_df.apply(_calc, axis=1)
+                 target_df = target_df.sort_values(by='Distance', ascending=True)
 
-            # 3. Selected Item Detail (If any)
+            # 3. Selected Item Info Card (Displayed ABOVE Map)
             status = st.session_state.selection_status
-            if status and status.get('type')=='existing' and status['data']['Cuisine'] == cat: # Only show if matches cat? Or global?
-                # Actually if user selected something in "Korean" then switched to "Chinese", selection might persist?
-                # User request: "Click other button -> Previous content disappears".
-                # So Detail view should probably close if category changes?
-                # I will handle detail view rendering here.
-                d_row = status['data']
-                with st.container(border=True):
-                    st.subheader(f"🍽️ {d_row['Name']}")
-                    st.caption(f"⭐ {d_row['Rating']:.1f} | {d_row['BestMenu']}")
-                    if st.button("닫기", key=f"close_{cat}"):
-                        st.session_state.selection_status = None
-                        st.rerun()
-                    st.info(d_row['Review'])
+            selected_name = None
+            if status and status.get('type')=='existing':
+                 d_row = status['data']
+                 # Check if item belongs to current view (optional, but good for context)
+                 # For "All" show everything. For "Korean" show only Korean.
+                 if cat == "전체" or d_row['Cuisine'] == cat:
+                     selected_name = d_row['Name']
+                     with st.container(border=True):
+                         st.subheader(f"🍽️ {d_row['Name']}")
+                         st.caption(f"⭐ {d_row['Rating']:.1f} | {d_row['BestMenu']}")
+                         st.info(d_row['Review'])
+                         if st.button("닫기", key=f"close_{cat}"):
+                             st.session_state.selection_status = None
+                             st.rerun()
 
-            # 4. List View (Compact Monospace)
-            if not target_df.empty:
-                st.caption(f"📋 {cat} 리스트 ({len(target_df)}곳)")
-                with st.container(height=300): # Scrollable
-                    for _, row in target_df.iterrows():
-                        n = row['Name']
-                        if len(n)>8: n = n[:7]+".."
-                        c = row['Cuisine'][:4]
-                        r = f"{row['Rating']:.1f}"
-                        m = row['BestMenu'] if pd.notna(row['BestMenu']) else ""
-                        
-                        label = f"{n} | {c} | ⭐{r} | {m}"
-                        
-                        # Selection Hook
-                        is_sel = (status and status.get('data', {}).get('Name') == row['Name'])
-                        
-                        if st.button(label, key=f"btn_{cat}_{row['id']}", type="primary" if is_sel else "secondary", use_container_width=True):
-                            st.session_state.selection_status = {'type': 'existing', 'data': row}
-                            st.session_state.selected_lat = row['Latitude']
-                            st.session_state.selected_lon = row['Longitude']
-                            st.rerun()
-            else:
-                st.info("데이터가 없습니다.")
-
-            # 5. Map (Below List)
-            # Prepare Markers
+            # 4. Map View
             map_markers = []
             for _, row in target_df.iterrows():
-                if pd.notna(row['Latitude']):
-                    map_markers.append({"lat": row['Latitude'], "lng": row['Longitude'], "name": row['Name'], "rating": row['Rating']})
+                 if pd.notna(row['Latitude']): 
+                     map_markers.append({"lat": row['Latitude'], "lng": row['Longitude'], "name": row['Name']})
             
-            c_lat = st.session_state.selected_lat or DEFAULT_LAT
-            c_lon = st.session_state.selected_lon or DEFAULT_LON
+            if selected_name:
+                map_markers = [m for m in map_markers if m['name'] == selected_name]
             
             # Map HTML
-            map_id = f"map_{cat}"
+            map_id = f"map_tab_{abs(hash(cat))}"
             html = f"""
+            <!-- Load SDK with autoload=false -->
+            <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={DEFAULT_JS_API_KEY}&libraries=services&autoload=false"></script>
             <div id="{map_id}" style="width:100%; height:350px;"></div>
             <script>
-                if (typeof kakao !== 'undefined') {{
-                    kakao.maps.load(function() {{
-                        var container = document.getElementById('{map_id}');
-                        var options = {{ center: new kakao.maps.LatLng({c_lat}, {c_lon}), level: 5 }};
-                        var map = new kakao.maps.Map(container, options);
-                        
-                        // Company
-                        new kakao.maps.CustomOverlay({{
-                            position: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LON}),
-                            content: '<div style="font-size:30px;">🏢</div>',
-                            map: map
+                var checkKakao_{abs(hash(cat))} = setInterval(function() {{
+                    var container = document.getElementById('{map_id}');
+                    if (typeof kakao !== 'undefined' && kakao.maps && container && container.offsetWidth > 0) {{
+                        clearInterval(checkKakao_{abs(hash(cat))});
+                        kakao.maps.load(function() {{
+                            var cLat = {DEFAULT_LAT};
+                            var cLon = {DEFAULT_LON};
+                            
+                            var storedLevel = sessionStorage.getItem('map_zoom_' + '{map_id}');
+                            var level = storedLevel ? parseInt(storedLevel) : 5;
+                            
+                            var options = {{ center: new kakao.maps.LatLng(cLat, cLon), level: level }};
+                            var map = new kakao.maps.Map(container, options);
+                            
+                            kakao.maps.event.addListener(map, 'zoom_changed', function() {{
+                                sessionStorage.setItem('map_zoom_' + '{map_id}', map.getLevel());
+                            }});
+                            
+                            new kakao.maps.CustomOverlay({{
+                                position: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LON}),
+                                content: '<div style="font-size:30px;">🏢</div>',
+                                map: map
+                            }});
+                            
+                            var places = {json.dumps(map_markers)};
+                            var selectedName = "{selected_name if selected_name else ''}";
+                            
+                            places.forEach(function(p) {{
+                                var m = new kakao.maps.Marker({{ map: map, position: new kakao.maps.LatLng(p.lat, p.lng), title: p.name }});
+                                var content = '<div style="padding:5px;">' + p.name + '</div>';
+                                var iw = new kakao.maps.InfoWindow({{ content: content }});
+                                
+                                kakao.maps.event.addListener(m, 'click', function() {{ iw.open(map, m); }});
+                                
+                                if (p.name === selectedName) {{
+                                    iw.open(map, m);
+                                }}
+                            }});
                         }});
-                        
-                        // Places
-                        var places = {json.dumps(map_markers)};
-                        places.forEach(function(p) {{
-                            var m = new kakao.maps.Marker({{ map: map, position: new kakao.maps.LatLng(p.lat, p.lng), title: p.name }});
-                            var iw = new kakao.maps.InfoWindow({{ content: '<div style="padding:5px;">' + p.name + '</div>' }});
-                            kakao.maps.event.addListener(m, 'click', function() {{ iw.open(map, m); }});
-                        }});
-                    }});
-                }}
+                    }}
+                }}, 100);
             </script>
-            <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={DEFAULT_JS_API_KEY}&libraries=services&autoload=false"></script>
             """
             components.html(html, height=370)
+
+            # 5. List View (Below Map)
+            if not target_df.empty:
+                 st.caption(f"📋 {cat} 맛집 ({len(target_df)}곳)")
+                 with st.container(height=300):
+                     for _, row in target_df.iterrows():
+                         n = row['Name']; c = row['Cuisine'][:4]; r = f"{row['Rating']:.1f}"
+                         m = row['BestMenu'] if pd.notna(row['BestMenu']) else ""
+                         if len(m)>10: m = m[:9]+".."
+                         if len(n)>8: n = n[:7]+".."
+                         label = f"{n} | {c} | ⭐{r} | {m}"
+                         
+                         is_sel = (selected_name == row['Name'])
+                         if st.button(label, key=f"btn_{cat}_{row['id']}", type="primary" if is_sel else "secondary", use_container_width=True):
+                             st.session_state.selection_status = {'type':'existing', 'data':row}
+                             st.session_state.selected_lat = row['Latitude']
+                             st.session_state.selected_lon = row['Longitude']
+                             st.rerun()
+            else:
+                 st.info("등록된 맛집이 없습니다.")
 
 # Check logic for Search Results View (Duplicated layout or helper?)
 # To save space, I handled search separately above, but I should probably render the same dashboard structure.
