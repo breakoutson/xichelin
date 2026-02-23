@@ -26,6 +26,10 @@ def get_secret(key):
 DEFAULT_REST_API_KEY = get_secret("KAKAO_REST_API_KEY")
 DEFAULT_JS_API_KEY = get_secret("KAKAO_JS_API_KEY")
 
+if not DEFAULT_JS_API_KEY:
+    st.error("⚠️ KAKAO_JS_API_KEY가 설정되지 않았습니다. .env 파일이나 Streamlit Secrets를 확인해주세요.")
+    st.stop()
+
 # Configuration
 st.set_page_config(page_title="회사 점심 지도", page_icon="🍽️", layout="wide")
 
@@ -119,18 +123,32 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
     # Stable ID and clean JS
     html = f"""
     <div id="{map_id}" style="width:100%; height:350px; background-color:#f0f2f6; border-radius:12px; display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; border:1px solid #e0e0e0;">
-        <div id="{map_id}_status" style="z-index:1; color:#555; font-family:sans-serif;">지도를 불러오는 중...</div>
+        <div id="{map_id}_status" style="z-index:1; color:#555; font-family:sans-serif; text-align:center; padding:20px;">
+            <div id="{map_id}_msg">지도를 불러오는 중...</div>
+            <div id="{map_id}_error" style="color:#d9534f; font-size:12px; margin-top:10px; display:none;"></div>
+        </div>
         <div id="{map_id}_canvas" style="position:absolute; top:0; left:0; width:100%; height:100%;"></div>
     </div>
+    <script>
+        window.onerror = function(msg, url, line) {{
+            var errDiv = document.getElementById('{map_id}_error');
+            if (errDiv) {{
+                errDiv.innerHTML = "JS Error: " + msg + " (line " + line + ")";
+                errDiv.style.display = 'block';
+            }}
+        }};
+    </script>
     <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={DEFAULT_JS_API_KEY}&libraries=services&autoload=false"></script>
     <script>
         (function() {{
             var checkCount = 0;
-            var maxChecks = 60; // 6 seconds
+            var maxChecks = 100; // 10 seconds
             
             var initMap = function() {{
                 var container = document.getElementById('{map_id}_canvas');
                 var status = document.getElementById('{map_id}_status');
+                var msg = document.getElementById('{map_id}_msg');
+                var errDiv = document.getElementById('{map_id}_error');
                 
                 if (typeof kakao === 'undefined' || !kakao.maps) {{
                     if (checkCount < maxChecks) {{
@@ -138,71 +156,79 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
                         setTimeout(initMap, 100);
                         return;
                     }}
-                    status.innerHTML = "⚠️ 지도 서비스를 로드할 수 없습니다.<br><small>API 키 또는 네트워크 상세 확인 필요</small>";
-                    status.style.textAlign = "center";
+                    msg.innerHTML = "⚠️ 카카오 지도 SDK 로드 실패";
+                    if (errDiv) errDiv.style.display = 'block';
+                    if (!"{DEFAULT_JS_API_KEY}" || "{DEFAULT_JS_API_KEY}" === "None") {{
+                         msg.innerHTML = "⚠️ API Key Missing";
+                    }}
                     return;
                 }}
 
                 kakao.maps.load(function() {{
-                    status.style.display = 'none';
-                    var level = parseInt(sessionStorage.getItem('map_zoom_{map_id}') || '5');
-                    var options = {{
-                        center: new kakao.maps.LatLng({center_lat}, {center_lon}),
-                        level: level
-                    }};
-                    var map = new kakao.maps.Map(container, options);
-                    
-                    kakao.maps.event.addListener(map, 'zoom_changed', function() {{
-                        sessionStorage.setItem('map_zoom_{map_id}', map.getLevel());
-                    }});
-                    
-                    // Home/Company
-                    new kakao.maps.CustomOverlay({{
-                        position: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LON}),
-                        content: '<div style="font-size:32px; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3)); cursor:default;">🏢</div>',
-                        map: map
-                    }});
-                    
-                    // Places
-                    var places = {json.dumps(markers)};
-                    var selName = "{selected_name if selected_name else ''}";
-                    var infowindow = new kakao.maps.InfoWindow({{ zIndex: 10 }});
+                    try {{
+                        status.style.display = 'none';
+                        var level = parseInt(sessionStorage.getItem('map_zoom_{map_id}') || '5');
+                        var options = {{
+                            center: new kakao.maps.LatLng({center_lat}, {center_lon}),
+                            level: level
+                        }};
+                        var map = new kakao.maps.Map(container, options);
+                        
+                        kakao.maps.event.addListener(map, 'zoom_changed', function() {{
+                            sessionStorage.setItem('map_zoom_{map_id}', map.getLevel());
+                        }});
+                        
+                        // Home/Company
+                        new kakao.maps.CustomOverlay({{
+                            position: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LON}),
+                            content: '<div style="font-size:32px; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3)); cursor:default;">🏢</div>',
+                            map: map
+                        }});
+                        
+                        // Places
+                        var places = {json.dumps(markers)};
+                        var selName = {json.dumps(selected_name) if selected_name else "null"};
+                        var infowindow = new kakao.maps.InfoWindow({{ zIndex: 10 }});
 
-                    places.forEach(function(p) {{
-                        var mPos = new kakao.maps.LatLng(p.lat, p.lng);
-                        var marker = new kakao.maps.Marker({{ map: map, position: mPos }});
-                        var content = '<div style="padding:8px; min-width:120px; font-size:13px; font-family:sans-serif;">' +
-                                      '<strong>' + p.name + '</strong>' +
-                                      '</div>';
-                        
-                        kakao.maps.event.addListener(marker, 'click', function() {{
-                            infowindow.setContent(content);
-                            infowindow.open(map, marker);
+                        places.forEach(function(p) {{
+                            var mPos = new kakao.maps.LatLng(p.lat, p.lng);
+                            var marker = new kakao.maps.Marker({{ map: map, position: mPos }});
+                            var content = '<div style="padding:8px; min-width:120px; font-size:13px; font-family:sans-serif;">' +
+                                          '<strong>' + p.name + '</strong>' +
+                                          '</div>';
+                            
+                            kakao.maps.event.addListener(marker, 'click', function() {{
+                                infowindow.setContent(content);
+                                infowindow.open(map, marker);
+                            }});
+                            
+                            if (p.name === selName) {{
+                                infowindow.setContent(content);
+                                infowindow.open(map, marker);
+                                map.setCenter(mPos);
+                            }}
                         }});
                         
-                        if (p.name === selName) {{
-                            infowindow.setContent(content);
-                            infowindow.open(map, marker);
-                            map.setCenter(mPos);
-                        }}
-                    }});
-                    
-                    // External Search
-                    var sMarkers = {json.dumps(search_markers)};
-                    sMarkers.forEach(function(p) {{
-                        var mPos = new kakao.maps.LatLng(p.lat, p.lng);
-                        var marker = new kakao.maps.Marker({{ 
-                            map: map, 
-                            position: mPos, 
-                            image: new kakao.maps.MarkerImage('https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png', new kakao.maps.Size(24, 35)) 
+                        // External Search
+                        var sMarkers = {json.dumps(search_markers)};
+                        sMarkers.forEach(function(p) {{
+                            var mPos = new kakao.maps.LatLng(p.lat, p.lng);
+                            var marker = new kakao.maps.Marker({{ 
+                                map: map, 
+                                position: mPos, 
+                                image: new kakao.maps.MarkerImage('https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png', new kakao.maps.Size(24, 35)) 
+                            }});
+                            kakao.maps.event.addListener(marker, 'click', function() {{
+                                infowindow.setContent('<div style="padding:8px; font-size:13px;"><strong>' + p.name + '</strong> <span style="color:red; font-size:11px;">(외부)</span></div>');
+                                infowindow.open(map, marker);
+                            }});
                         }});
-                        kakao.maps.event.addListener(marker, 'click', function() {{
-                            infowindow.setContent('<div style="padding:8px; font-size:13px;"><strong>' + p.name + '</strong> <span style="color:red; font-size:11px;">(외부)</span></div>');
-                            infowindow.open(map, marker);
-                        }});
-                    }});
-                    
-                    setTimeout(function() {{ map.relayout(); }}, 300);
+                        
+                        setTimeout(function() {{ map.relayout(); }}, 300);
+                    }} catch (e) {{
+                        status.style.display = 'flex';
+                        msg.innerHTML = "⚠️ 지도 초기화 오류: " + e.message;
+                    }}
                 }});
             }};
             
