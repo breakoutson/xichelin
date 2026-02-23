@@ -120,25 +120,35 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None, search_markers=None):
     if search_markers is None: search_markers = []
     
-    # Simple and robust map initialization
+    # Final fix for Mixed Content & Mobile rendering
     html = f"""
-    <div id="{map_id}" style="width:100%; height:350px; background-color:#f8f9fa; border-radius:12px; border:1px solid #ddd;"></div>
+    <head>
+        <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
+    </head>
+    <div id="{map_id}" style="width:100%; height:350px; background-color:#f8f9fa; border-radius:12px; border:1px solid #ddd; display:flex; align-items:center; justify-content:center; position:relative;">
+        <div id="{map_id}_loader" style="position:absolute; z-index:5; color:#666; font-size:14px;">지도를 로드 중...</div>
+        <div id="{map_id}_canvas" style="position:absolute; top:0; left:0; width:100%; height:100%;"></div>
+    </div>
     <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={DEFAULT_JS_API_KEY}&libraries=services&autoload=false"></script>
     <script>
         (function() {{
-            var container = document.getElementById('{map_id}');
+            var container = document.getElementById('{map_id}_canvas');
+            var loader = document.getElementById('{map_id}_loader');
             var attempt = 0;
             
             function init() {{
                 if (typeof kakao === 'undefined' || !kakao.maps) {{
-                    if (attempt < 50) {{
+                    if (attempt < 100) {{
                         attempt++;
                         setTimeout(init, 100);
+                    }} else {{
+                        loader.innerHTML = "⚠️ 지도 로드 실패 (로그 확인)";
                     }}
                     return;
                 }}
                 
                 kakao.maps.load(function() {{
+                    loader.style.display = 'none';
                     var level = parseInt(sessionStorage.getItem('map_zoom_{map_id}') || '5');
                     var options = {{
                         center: new kakao.maps.LatLng({center_lat}, {center_lon}),
@@ -146,12 +156,11 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
                     }};
                     var map = new kakao.maps.Map(container, options);
                     
-                    // Zoom persistence
                     kakao.maps.event.addListener(map, 'zoom_changed', function() {{
                         sessionStorage.setItem('map_zoom_{map_id}', map.getLevel());
                     }});
                     
-                    // Standard Home Marker
+                    // Home Marker
                     new kakao.maps.CustomOverlay({{
                         position: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LON}),
                         content: '<div style="font-size:32px; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3));">🏢</div>',
@@ -189,14 +198,10 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
                         }});
                     }});
                     
-                    // Mobile Fix: Force relayout after a short delay
+                    // Essential for mobile & iframe
                     setTimeout(function() {{
                         map.relayout();
-                        if (selName) {{
-                             // Re-center for selected item if needed
-                        }} else {{
-                             map.setCenter(new kakao.maps.LatLng({center_lat}, {center_lon}));
-                        }}
+                        if (!selName) map.setCenter(new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LON}));
                     }}, 200);
                 }});
             }}
