@@ -45,8 +45,8 @@ st.markdown("""
         }
         
         /* Map Container Height adjustment */
-        #map {
-            height: 350px !important;
+        div[id^="map_"] {
+            height: 300px !important;
         }
     }
     </style>
@@ -109,6 +109,83 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     a = math.sin(dlat / 2) * math.sin(dlat / 2) + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) * math.sin(dlon / 2)
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c * 1000
+
+def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None, search_markers=None):
+    if search_markers is None: search_markers = []
+    
+    # Stable ID and clean JS
+    html = f"""
+    <div id="{map_id}" style="width:100%; height:350px; background-color:#eee; border-radius:10px;"></div>
+    <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={DEFAULT_JS_API_KEY}&libraries=services&autoload=false"></script>
+    <script>
+        (function() {{
+            var checkCount = 0;
+            var checkInterval = setInterval(function() {{
+                var container = document.getElementById('{map_id}');
+                if (typeof kakao !== 'undefined' && kakao.maps && container) {{
+                    // Wait for container to have dimensions or timeout after 3s
+                    if (container.offsetWidth > 0 || checkCount > 30) {{
+                        clearInterval(checkInterval);
+                        kakao.maps.load(function() {{
+                            var options = {{
+                                center: new kakao.maps.LatLng({center_lat}, {center_lon}),
+                                level: parseInt(sessionStorage.getItem('map_zoom_{map_id}') || '5')
+                            }};
+                            var map = new kakao.maps.Map(container, options);
+                            
+                            // Handle Zoom Persistence
+                            kakao.maps.event.addListener(map, 'zoom_changed', function() {{
+                                sessionStorage.setItem('map_zoom_{map_id}', map.getLevel());
+                            }});
+                            
+                            // Company Marker
+                            new kakao.maps.CustomOverlay({{
+                                position: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LON}),
+                                content: '<div style="font-size:30px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">🏢</div>',
+                                map: map
+                            }});
+                            
+                            // Restaurant Markers
+                            var places = {json.dumps(markers)};
+                            var selName = "{selected_name if selected_name else ''}";
+                            
+                            places.forEach(function(p) {{
+                                var mPos = new kakao.maps.LatLng(p.lat, p.lng);
+                                var m = new kakao.maps.Marker({{ map: map, position: mPos, title: p.name }});
+                                var iw = new kakao.maps.InfoWindow({{ content: '<div style="padding:5px; font-size:12px; font-weight:bold;">' + p.name + '</div>' }});
+                                kakao.maps.event.addListener(m, 'click', function() {{ iw.open(map, m); }});
+                                if (p.name === selName) {{
+                                    iw.open(map, m);
+                                    map.setCenter(mPos);
+                                }}
+                            }});
+                            
+                            // Search Result Markers (Red)
+                            var sMarkers = {json.dumps(search_markers)};
+                            sMarkers.forEach(function(p) {{
+                                var mPos = new kakao.maps.LatLng(p.lat, p.lng);
+                                var img = 'https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png';
+                                var m = new kakao.maps.Marker({{ 
+                                    map: map, 
+                                    position: mPos, 
+                                    image: new kakao.maps.MarkerImage(img, new kakao.maps.Size(24, 35)) 
+                                }});
+                                var iw = new kakao.maps.InfoWindow({{ content: '<div style="padding:5px; color:red; font-size:12px;">' + p.name + ' (외부)</div>' }});
+                                kakao.maps.event.addListener(m, 'click', function() {{ iw.open(map, m); }});
+                            }});
+                            
+                            // Fix for mobile rendering
+                            setTimeout(function() {{ map.relayout(); }}, 500);
+                        }});
+                    }}
+                }}
+                checkCount++;
+                if (checkCount > 100) clearInterval(checkInterval); // Safety exit
+            }}, 100);
+        }})();
+    </script>
+    """
+    components.html(html, height=370)
 
 # --- State Init ---
 if 'active_category' not in st.session_state: st.session_state.active_category = "전체" # Default to Open "All"
@@ -241,60 +318,7 @@ if st.session_state.search_query:
     c_lat = DEFAULT_LAT
     c_lon = DEFAULT_LON
     
-    map_id = "map_search"
-    html = f"""
-    <!-- Load SDK with autoload=false -->
-    <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={DEFAULT_JS_API_KEY}&libraries=services&autoload=false"></script>
-    
-    <div id="{map_id}" style="width:100%; height:350px;"></div>
-    <script>
-        var checkKakaoSearch = setInterval(function() {{
-            if (typeof kakao !== 'undefined' && kakao.maps) {{
-                clearInterval(checkKakaoSearch);
-                kakao.maps.load(function() {{
-                    var container = document.getElementById('{map_id}');
-                    
-                    var storedLevel = sessionStorage.getItem('map_zoom_' + '{map_id}');
-                    var level = storedLevel ? parseInt(storedLevel) : 5;
-                    
-                    var options = {{ center: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LON}), level: level }};
-                    var map = new kakao.maps.Map(container, options);
-                    
-                    kakao.maps.event.addListener(map, 'zoom_changed', function() {{
-                        sessionStorage.setItem('map_zoom_' + '{map_id}', map.getLevel());
-                    }});
-                    
-                    new kakao.maps.CustomOverlay({{
-                        position: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LON}),
-                        content: '<div style="font-size:30px;">🏢</div>',
-                        map: map
-                    }});
-                    
-                    // Filtered Results
-                    var places = {json.dumps(map_markers)};
-                    var selectedName = "{selected_name if selected_name else ''}";
-
-                    places.forEach(function(p) {{
-                        var m = new kakao.maps.Marker({{ map: map, position: new kakao.maps.LatLng(p.lat, p.lng), title: p.name }});
-                        var iw = new kakao.maps.InfoWindow({{ content: '<div style="padding:5px;">' + p.name + '</div>' }});
-                        kakao.maps.event.addListener(m, 'click', function() {{ iw.open(map, m); }});
-                        if (p.name === selectedName) iw.open(map, m);
-                    }});
-                    
-                    // Kakao Search Results (Red)
-                    var searchM = {json.dumps(search_markers)};
-                    searchM.forEach(function(p) {{
-                         var img = 'https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png';
-                         var m = new kakao.maps.Marker({{ map: map, position: new kakao.maps.LatLng(p.lat, p.lng), image: new kakao.maps.MarkerImage(img, new kakao.maps.Size(24, 35)) }});
-                         var iw = new kakao.maps.InfoWindow({{ content: '<div style="padding:5px; color:red;">' + p.name + ' (외부검색)</div>' }});
-                         kakao.maps.event.addListener(m, 'click', function() {{ iw.open(map, m); }});
-                    }});
-                }});
-            }}
-        }}, 100);
-    </script>
-    """
-    components.html(html, height=370)
+    render_kakao_map("map_search", map_markers, DEFAULT_LAT, DEFAULT_LON, selected_name, search_markers)
 
     # 4. List View
     if not target_df.empty:
@@ -377,56 +401,8 @@ else:
                 map_markers = [m for m in map_markers if m['name'] == selected_name]
             
             # Map HTML
-            map_id = f"map_tab_{abs(hash(cat))}"
-            html = f"""
-            <!-- Load SDK with autoload=false -->
-            <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={DEFAULT_JS_API_KEY}&libraries=services&autoload=false"></script>
-            <div id="{map_id}" style="width:100%; height:350px;"></div>
-            <script>
-                var checkKakao_{abs(hash(cat))} = setInterval(function() {{
-                    var container = document.getElementById('{map_id}');
-                    if (typeof kakao !== 'undefined' && kakao.maps && container && container.offsetWidth > 0) {{
-                        clearInterval(checkKakao_{abs(hash(cat))});
-                        kakao.maps.load(function() {{
-                            var cLat = {DEFAULT_LAT};
-                            var cLon = {DEFAULT_LON};
-                            
-                            var storedLevel = sessionStorage.getItem('map_zoom_' + '{map_id}');
-                            var level = storedLevel ? parseInt(storedLevel) : 5;
-                            
-                            var options = {{ center: new kakao.maps.LatLng(cLat, cLon), level: level }};
-                            var map = new kakao.maps.Map(container, options);
-                            
-                            kakao.maps.event.addListener(map, 'zoom_changed', function() {{
-                                sessionStorage.setItem('map_zoom_' + '{map_id}', map.getLevel());
-                            }});
-                            
-                            new kakao.maps.CustomOverlay({{
-                                position: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LON}),
-                                content: '<div style="font-size:30px;">🏢</div>',
-                                map: map
-                            }});
-                            
-                            var places = {json.dumps(map_markers)};
-                            var selectedName = "{selected_name if selected_name else ''}";
-                            
-                            places.forEach(function(p) {{
-                                var m = new kakao.maps.Marker({{ map: map, position: new kakao.maps.LatLng(p.lat, p.lng), title: p.name }});
-                                var content = '<div style="padding:5px;">' + p.name + '</div>';
-                                var iw = new kakao.maps.InfoWindow({{ content: content }});
-                                
-                                kakao.maps.event.addListener(m, 'click', function() {{ iw.open(map, m); }});
-                                
-                                if (p.name === selectedName) {{
-                                    iw.open(map, m);
-                                }}
-                            }});
-                        }});
-                    }}
-                }}, 100);
-            </script>
-            """
-            components.html(html, height=370)
+            map_id = f"map_tab_{cat.replace(' ', '_')}"
+            render_kakao_map(map_id, map_markers, DEFAULT_LAT, DEFAULT_LON, selected_name)
 
             # 5. List View (Below Map)
             if not target_df.empty:
