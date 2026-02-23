@@ -9,6 +9,9 @@ import requests
 import math
 import random
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # --- Utilities ---
 
 def get_secret(key):
@@ -115,73 +118,95 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
     
     # Stable ID and clean JS
     html = f"""
-    <div id="{map_id}" style="width:100%; height:350px; background-color:#eee; border-radius:10px;"></div>
+    <div id="{map_id}" style="width:100%; height:350px; background-color:#f0f2f6; border-radius:12px; display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; border:1px solid #e0e0e0;">
+        <div id="{map_id}_status" style="z-index:1; color:#555; font-family:sans-serif;">지도를 불러오는 중...</div>
+        <div id="{map_id}_canvas" style="position:absolute; top:0; left:0; width:100%; height:100%;"></div>
+    </div>
     <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={DEFAULT_JS_API_KEY}&libraries=services&autoload=false"></script>
     <script>
         (function() {{
             var checkCount = 0;
-            var checkInterval = setInterval(function() {{
-                var container = document.getElementById('{map_id}');
-                if (typeof kakao !== 'undefined' && kakao.maps && container) {{
-                    // Wait for container to have dimensions or timeout after 3s
-                    if (container.offsetWidth > 0 || checkCount > 30) {{
-                        clearInterval(checkInterval);
-                        kakao.maps.load(function() {{
-                            var options = {{
-                                center: new kakao.maps.LatLng({center_lat}, {center_lon}),
-                                level: parseInt(sessionStorage.getItem('map_zoom_{map_id}') || '5')
-                            }};
-                            var map = new kakao.maps.Map(container, options);
-                            
-                            // Handle Zoom Persistence
-                            kakao.maps.event.addListener(map, 'zoom_changed', function() {{
-                                sessionStorage.setItem('map_zoom_{map_id}', map.getLevel());
-                            }});
-                            
-                            // Company Marker
-                            new kakao.maps.CustomOverlay({{
-                                position: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LON}),
-                                content: '<div style="font-size:30px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">🏢</div>',
-                                map: map
-                            }});
-                            
-                            // Restaurant Markers
-                            var places = {json.dumps(markers)};
-                            var selName = "{selected_name if selected_name else ''}";
-                            
-                            places.forEach(function(p) {{
-                                var mPos = new kakao.maps.LatLng(p.lat, p.lng);
-                                var m = new kakao.maps.Marker({{ map: map, position: mPos, title: p.name }});
-                                var iw = new kakao.maps.InfoWindow({{ content: '<div style="padding:5px; font-size:12px; font-weight:bold;">' + p.name + '</div>' }});
-                                kakao.maps.event.addListener(m, 'click', function() {{ iw.open(map, m); }});
-                                if (p.name === selName) {{
-                                    iw.open(map, m);
-                                    map.setCenter(mPos);
-                                }}
-                            }});
-                            
-                            // Search Result Markers (Red)
-                            var sMarkers = {json.dumps(search_markers)};
-                            sMarkers.forEach(function(p) {{
-                                var mPos = new kakao.maps.LatLng(p.lat, p.lng);
-                                var img = 'https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png';
-                                var m = new kakao.maps.Marker({{ 
-                                    map: map, 
-                                    position: mPos, 
-                                    image: new kakao.maps.MarkerImage(img, new kakao.maps.Size(24, 35)) 
-                                }});
-                                var iw = new kakao.maps.InfoWindow({{ content: '<div style="padding:5px; color:red; font-size:12px;">' + p.name + ' (외부)</div>' }});
-                                kakao.maps.event.addListener(m, 'click', function() {{ iw.open(map, m); }});
-                            }});
-                            
-                            // Fix for mobile rendering
-                            setTimeout(function() {{ map.relayout(); }}, 500);
-                        }});
+            var maxChecks = 60; // 6 seconds
+            
+            var initMap = function() {{
+                var container = document.getElementById('{map_id}_canvas');
+                var status = document.getElementById('{map_id}_status');
+                
+                if (typeof kakao === 'undefined' || !kakao.maps) {{
+                    if (checkCount < maxChecks) {{
+                        checkCount++;
+                        setTimeout(initMap, 100);
+                        return;
                     }}
+                    status.innerHTML = "⚠️ 지도 서비스를 로드할 수 없습니다.<br><small>API 키 또는 네트워크 상세 확인 필요</small>";
+                    status.style.textAlign = "center";
+                    return;
                 }}
-                checkCount++;
-                if (checkCount > 100) clearInterval(checkInterval); // Safety exit
-            }}, 100);
+
+                kakao.maps.load(function() {{
+                    status.style.display = 'none';
+                    var level = parseInt(sessionStorage.getItem('map_zoom_{map_id}') || '5');
+                    var options = {{
+                        center: new kakao.maps.LatLng({center_lat}, {center_lon}),
+                        level: level
+                    }};
+                    var map = new kakao.maps.Map(container, options);
+                    
+                    kakao.maps.event.addListener(map, 'zoom_changed', function() {{
+                        sessionStorage.setItem('map_zoom_{map_id}', map.getLevel());
+                    }});
+                    
+                    // Home/Company
+                    new kakao.maps.CustomOverlay({{
+                        position: new kakao.maps.LatLng({DEFAULT_LAT}, {DEFAULT_LON}),
+                        content: '<div style="font-size:32px; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3)); cursor:default;">🏢</div>',
+                        map: map
+                    }});
+                    
+                    // Places
+                    var places = {json.dumps(markers)};
+                    var selName = "{selected_name if selected_name else ''}";
+                    var infowindow = new kakao.maps.InfoWindow({{ zIndex: 10 }});
+
+                    places.forEach(function(p) {{
+                        var mPos = new kakao.maps.LatLng(p.lat, p.lng);
+                        var marker = new kakao.maps.Marker({{ map: map, position: mPos }});
+                        var content = '<div style="padding:8px; min-width:120px; font-size:13px; font-family:sans-serif;">' +
+                                      '<strong>' + p.name + '</strong>' +
+                                      '</div>';
+                        
+                        kakao.maps.event.addListener(marker, 'click', function() {{
+                            infowindow.setContent(content);
+                            infowindow.open(map, marker);
+                        }});
+                        
+                        if (p.name === selName) {{
+                            infowindow.setContent(content);
+                            infowindow.open(map, marker);
+                            map.setCenter(mPos);
+                        }}
+                    }});
+                    
+                    // External Search
+                    var sMarkers = {json.dumps(search_markers)};
+                    sMarkers.forEach(function(p) {{
+                        var mPos = new kakao.maps.LatLng(p.lat, p.lng);
+                        var marker = new kakao.maps.Marker({{ 
+                            map: map, 
+                            position: mPos, 
+                            image: new kakao.maps.MarkerImage('https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png', new kakao.maps.Size(24, 35)) 
+                        }});
+                        kakao.maps.event.addListener(marker, 'click', function() {{
+                            infowindow.setContent('<div style="padding:8px; font-size:13px;"><strong>' + p.name + '</strong> <span style="color:red; font-size:11px;">(외부)</span></div>');
+                            infowindow.open(map, marker);
+                        }});
+                    }});
+                    
+                    setTimeout(function() {{ map.relayout(); }}, 300);
+                }});
+            }};
+            
+            initMap();
         }})();
     </script>
     """
