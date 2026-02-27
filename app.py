@@ -447,15 +447,17 @@ if st.session_state.search_query:
                     
                     submitted = st.form_submit_button("등록하기", type="primary", use_container_width=True)
                     if submitted:
-                        if not new_menu or not new_review:
-                            st.warning("대표 메뉴와 리뷰를 작성해주세요!")
+                        if not new_menu:
+                            st.warning("대표 메뉴를 작성해주세요!")
                         else:
+                            # If review is empty, provide a default or handle it
+                            final_review = new_review if new_review.strip() else "리뷰가 없습니다."
                             new_row = {
                                 'Name': selected_name,
                                 'Cuisine': new_cuisine,
                                 'Rating': new_rating,
                                 'RatingCount': 1,
-                                'Review': new_review,
+                                'Review': final_review,
                                 'Latitude': float(new_place['y']),
                                 'Longitude': float(new_place['x']),
                                 'BestMenu': new_menu,
