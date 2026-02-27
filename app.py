@@ -347,26 +347,47 @@ if st.session_state.search_query:
     registered_names = set(df['Name'].tolist())
     external_new = [p for p in kakao_res if p['place_name'] not in registered_names]
     
-    # 1. UI Control: Clear Search or Register The Most Relevant External Result
-    c_btn1, c_btn2 = st.columns([1, 1])
-    with c_btn1:
+    # 1. 통합 검색 결과 리스트 (상단 배치)
+    st.caption(f"🔍 '{st.session_state.search_query}' 검색 결과 (등록 {len(target_df)} / 미등록 {len(external_new)})")
+    
+    with st.container(height=260): # 버튼들이 있던 자리에 리스트 배치
+        # A. 등록된 맛집 리스트
+        for _, row in target_df.iterrows():
+            n = row['Name']; c = row['Cuisine'][:4]; r = f"{row['Rating']:.1f}"
+            m = row['BestMenu'] if pd.notna(row['BestMenu']) else ""
+            label = f"🏢 {n} | {c} | ⭐{r} | {m}"
+            
+            # 현재 선택된 항목인지 확인
+            is_sel = (s_status and s_status.get('type') == 'existing' and s_status['data']['id'] == row['id'])
+            
+            if st.button(label, key=f"top_res_reg_{row['id']}", type="primary" if is_sel else "secondary", use_container_width=True):
+                st.session_state.selection_status = {'type': 'existing', 'data': row}
+                st.session_state.selected_lat = row['Latitude']
+                st.session_state.selected_lon = row['Longitude']
+                st.rerun()
+        
+        # B. 미등록 맛집 리스트 (카카오 검색 결과 중 DB에 없는 것)
+        for i, p in enumerate(external_new):
+            n = p['place_name']
+            addr = p['address_name']
+            dist = p.get('distance', '')
+            dist_str = f"{dist}m" if dist else ""
+            label = f"➕ {n} | {addr} ({dist_str})"
+            
+            # 현재 선택된 항목인지 확인
+            is_sel = (s_status and s_status.get('type') == 'new' and s_status['data']['place_name'] == n)
+            
+            if st.button(label, key=f"top_res_new_{i}", type="primary" if is_sel else "secondary", use_container_width=True):
+                st.session_state.selection_status = {'type': 'new', 'data': p}
+                st.session_state.selected_lat = float(p['y'])
+                st.session_state.selected_lon = float(p['x'])
+                st.rerun()
+    
+    if target_df.empty and not external_new:
+        st.info("검색 결과가 없습니다.")
         if st.button("❌ 검색어 초기화", use_container_width=True):
             st.session_state.search_query = ""
-            st.session_state.active_category = "전체"
-            st.session_state.selection_status = None
             st.rerun()
-    with c_btn2:
-        if external_new:
-            # Show the most relevant external result's registration button at the top
-            top_p = external_new[0]
-            btn_label = f"➕ '{top_p['place_name']}' 등록"
-            if st.button(btn_label, type="primary", use_container_width=True):
-                st.session_state.selection_status = {'type': 'new', 'data': top_p}
-                st.session_state.selected_lat = float(top_p['y'])
-                st.session_state.selected_lon = float(top_p['x'])
-                st.rerun()
-        else:
-            st.button("➕ 새로운 맛집 등록", type="secondary", disabled=True, use_container_width=True)
     
     # 1. Sort Controls (Hidden in Expander)
     with st.expander("🌪️ 정렬 & 필터", expanded=False):
@@ -465,23 +486,8 @@ if st.session_state.search_query:
     
     render_kakao_map("map_search", map_markers, DEFAULT_LAT, DEFAULT_LON, selected_name, search_markers)
 
-    # 4. List View (Registered Only)
-    if not target_df.empty:
-        st.caption(f"📋 우리 회사 맛집 리스트 ({len(target_df)}곳)")
-        with st.container(height=200):
-            for _, row in target_df.iterrows():
-                n = row['Name']; c = row['Cuisine'][:4]; r = f"{row['Rating']:.1f}"
-                m = row['BestMenu'] if pd.notna(row['BestMenu']) else ""
-                label = f"{n} | {c} | ⭐{r} | {m}"
-                is_sel = (s_status and s_status.get('type') == 'existing' and s_status['data']['Name'] == n)
-                if st.button(label, key=f"btn_search_{row['id']}", type="primary" if is_sel else "secondary", use_container_width=True):
-                    st.session_state.selection_status = {'type': 'existing', 'data': row}
-                    st.session_state.selected_lat = row['Latitude']
-                    st.session_state.selected_lon = row['Longitude']
-                    st.rerun()
-    
-    if target_df.empty and not external_new:
-        st.info("검색 결과가 없습니다.")
+    # 4. (중복 리스트 제거됨)
+    pass
         
     st.markdown("---")
 
