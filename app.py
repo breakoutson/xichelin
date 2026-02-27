@@ -202,7 +202,7 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
                 
                 kakao.maps.load(function() {{
                     loader.style.display = 'none';
-                    var level = parseInt(sessionStorage.getItem('map_zoom_{map_id}') || '5');
+                    var level = parseInt(sessionStorage.getItem('map_zoom_{map_id}') || '3');
                     var options = {{
                         center: new kakao.maps.LatLng({center_lat}, {center_lon}),
                         level: level
@@ -331,14 +331,23 @@ categories = ["전체", "한식", "중식", "일식", "양식", "분식", "술�
 # If Search is active, we can show a special "Search Results" button at top that is open.
 
 if st.session_state.search_query:
-    # Filter content
+    # Filter content (Existing)
     target_df = df[
         df['Name'].str.contains(st.session_state.search_query) | 
         df['Cuisine'].str.contains(st.session_state.search_query) |
         df['BestMenu'].str.contains(st.session_state.search_query, na=False)
     ]
     
-    # 1. UI Control: Clear Search or Register New
+    # Fetch External Results (New)
+    try:
+        kakao_res = search_kakao_place(st.session_state.search_query)
+    except:
+        kakao_res = []
+    
+    registered_names = set(df['Name'].tolist())
+    external_new = [p for p in kakao_res if p['place_name'] not in registered_names]
+    
+    # 1. UI Control: Clear Search or Register The Most Relevant External Result
     c_btn1, c_btn2 = st.columns([1, 1])
     with c_btn1:
         if st.button("❌ 검색어 초기화", use_container_width=True):
@@ -347,11 +356,17 @@ if st.session_state.search_query:
             st.session_state.selection_status = None
             st.rerun()
     with c_btn2:
-        # Show register button if searching (and potentially not found or just as a shortcut)
-        if st.button("➕ 새로운 맛집 등록", type="primary", use_container_width=True):
-            # If there are kakao results, we could pick the first one or just open registration with name
-            # For now, let it be a general trigger or handled via list click
-            st.info("아래 '외부 검색 결과' 리스트에서 등록할 식당을 선택해주세요.")
+        if external_new:
+            # Show the most relevant external result's registration button at the top
+            top_p = external_new[0]
+            btn_label = f"➕ '{top_p['place_name']}' 등록"
+            if st.button(btn_label, type="primary", use_container_width=True):
+                st.session_state.selection_status = {'type': 'new', 'data': top_p}
+                st.session_state.selected_lat = float(top_p['y'])
+                st.session_state.selected_lon = float(top_p['x'])
+                st.rerun()
+        else:
+            st.button("➕ 새로운 맛집 등록", type="secondary", disabled=True, use_container_width=True)
     
     # 1. Sort Controls (Hidden in Expander)
     with st.expander("🌪️ 정렬 & 필터", expanded=False):
@@ -434,7 +449,7 @@ if st.session_state.search_query:
                     st.session_state.selection_status = None
                     st.rerun()
 
-    # 3. Map (Below Info)
+    # 3. Map (Injected earlier)
     # Internal Markers
     map_markers = []
     for _, row in target_df.iterrows():
@@ -444,30 +459,15 @@ if st.session_state.search_query:
     if selected_name:
         map_markers = [m for m in map_markers if m['name'] == selected_name]
     
-    # External Markers
-    try:
-        kakao_res = search_kakao_place(st.session_state.search_query)
-        if selected_name: # Filter external too if selected
-            kakao_res = [p for p in kakao_res if p['place_name'] == selected_name]
-    except:
-        kakao_res = []
-        
     search_markers = []
     for p in kakao_res:
          search_markers.append({"lat": float(p['y']), "lng": float(p['x']), "name": p['place_name']})
     
-    c_lat = DEFAULT_LAT
-    c_lon = DEFAULT_LON
-    
     render_kakao_map("map_search", map_markers, DEFAULT_LAT, DEFAULT_LON, selected_name, search_markers)
 
-    # 4. List View
-    # Split Kakao results into 'Already Registered' and 'New'
-    registered_names = set(df['Name'].tolist())
-    external_new = [p for p in kakao_res if p['place_name'] not in registered_names]
-    
+    # 4. List View (Registered Only)
     if not target_df.empty:
-        st.caption(f"📋 등록된 맛집 ({len(target_df)}곳)")
+        st.caption(f"📋 우리 회사 맛집 리스트 ({len(target_df)}곳)")
         with st.container(height=200):
             for _, row in target_df.iterrows():
                 n = row['Name']; c = row['Cuisine'][:4]; r = f"{row['Rating']:.1f}"
@@ -478,22 +478,6 @@ if st.session_state.search_query:
                     st.session_state.selection_status = {'type': 'existing', 'data': row}
                     st.session_state.selected_lat = row['Latitude']
                     st.session_state.selected_lon = row['Longitude']
-                    st.rerun()
-
-    if external_new:
-        st.caption(f"🌐 외부 검색 결과 (신규 등록 가능: {len(external_new)}곳)")
-        with st.container(height=200):
-            for i, p in enumerate(external_new):
-                n = p['place_name']
-                addr = p['address_name']
-                dist = p.get('distance', '')
-                dist_str = f"{dist}m" if dist else ""
-                label = f"➕ {n} | {addr} ({dist_str})"
-                is_sel = (s_status and s_status.get('type') == 'new' and s_status['data']['place_name'] == n)
-                if st.button(label, key=f"btn_external_{i}", type="primary" if is_sel else "secondary", use_container_width=True):
-                    st.session_state.selection_status = {'type': 'new', 'data': p}
-                    st.session_state.selected_lat = float(p['y'])
-                    st.session_state.selected_lon = float(p['x'])
                     st.rerun()
     
     if target_df.empty and not external_new:
