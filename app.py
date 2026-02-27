@@ -202,7 +202,7 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
                 
                 kakao.maps.load(function() {{
                     loader.style.display = 'none';
-                    var level = parseInt(sessionStorage.getItem('map_zoom_{map_id}') || '3');
+                    var level = parseInt(sessionStorage.getItem('map_zoom_{map_id}') || '2');
                     var options = {{
                         center: new kakao.maps.LatLng({center_lat}, {center_lon}),
                         level: level
@@ -331,6 +331,8 @@ categories = ["전체", "한식", "중식", "일식", "양식", "분식", "술�
 # If Search is active, we can show a special "Search Results" button at top that is open.
 
 if st.session_state.search_query:
+    s_status = st.session_state.selection_status
+    
     # Filter content (Existing)
     target_df = df[
         df['Name'].str.contains(st.session_state.search_query) | 
@@ -411,7 +413,6 @@ if st.session_state.search_query:
          target_df = target_df.sort_values(by='Distance', ascending=True)
 
     # 2. Detail View (Search)
-    s_status = st.session_state.selection_status
     selected_name = None
     
     if s_status:
