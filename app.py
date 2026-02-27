@@ -64,6 +64,17 @@ DATA_FILE = os.path.join(DATA_DIR, 'restaurants.csv')
 DEFAULT_LAT = 37.5617864
 DEFAULT_LON = 126.9910438
 
+def save_data(df):
+    try:
+        if not os.path.exists(DATA_DIR):
+            os.makedirs(DATA_DIR)
+        df.to_csv(DATA_FILE, index=False)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Error saving data: {e}")
+        return False
+
 # --- Data Loading ---
 @st.cache_data(ttl=60)
 def load_data():
@@ -307,16 +318,65 @@ if st.session_state.search_query:
     # 2. Detail View (Search)
     s_status = st.session_state.selection_status
     selected_name = None
-    if s_status and s_status.get('type') == 'existing':
-        d_row = s_status['data']
-        selected_name = d_row['Name']
-        with st.container(border=True):
-            st.subheader(f"🍽️ {d_row['Name']}")
-            st.caption(f"⭐ {d_row['Rating']:.1f} | {d_row['BestMenu']}")
-            st.info(d_row['Review'])
-            if st.button("닫기", key="close_search_detail"):
-                st.session_state.selection_status = None
-                st.rerun()
+    
+    if s_status:
+        if s_status.get('type') == 'existing':
+            d_row = s_status['data']
+            selected_name = d_row['Name']
+            with st.container(border=True):
+                st.subheader(f"🍽️ {d_row['Name']}")
+                st.caption(f"⭐ {d_row['Rating']:.1f} | {d_row['BestMenu']}")
+                st.info(d_row['Review'])
+                if st.button("닫기", key="close_search_detail"):
+                    st.session_state.selection_status = None
+                    st.rerun()
+        
+        elif s_status.get('type') == 'new':
+            new_place = s_status['data']
+            selected_name = new_place['place_name']
+            with st.container(border=True):
+                st.subheader(f"🆕 맛집 등록: {selected_name}")
+                st.caption(f"📍 {new_place['address_name']}")
+                
+                with st.form("registration_form"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        new_cuisine = st.selectbox("카테고리", ["한식", "중식", "일식", "양식", "분식", "술집", "기타"])
+                        new_rating = st.slider("평점", 0.0, 5.0, 4.0, 0.5)
+                    with col2:
+                        new_menu = st.text_input("대표 메뉴", placeholder="추천 메뉴를 적어주세요")
+                        new_recommender = st.text_input("추천인", value="익명")
+                    
+                    new_review = st.text_area("한줄평 / 리뷰", placeholder="맛이나 분위기 등을 공유해주세요")
+                    
+                    submitted = st.form_submit_button("등록하기", type="primary", use_container_width=True)
+                    if submitted:
+                        if not new_menu or not new_review:
+                            st.warning("대표 메뉴와 리뷰를 작성해주세요!")
+                        else:
+                            new_id = int(df['id'].max() + 1) if not df.empty else 1
+                            new_row = {
+                                'id': new_id,
+                                'Name': selected_name,
+                                'Cuisine': new_cuisine,
+                                'Rating': new_rating,
+                                'RatingCount': 1,
+                                'Review': new_review,
+                                'Latitude': float(new_place['y']),
+                                'Longitude': float(new_place['x']),
+                                'BestMenu': new_menu,
+                                'Recommender': new_recommender
+                            }
+                            new_df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                            if save_data(new_df):
+                                st.success(f"✅ '{selected_name}' 등록 완료!")
+                                time.sleep(1)
+                                st.session_state.selection_status = None
+                                st.rerun()
+                
+                if st.button("취소", key="cancel_reg"):
+                    st.session_state.selection_status = None
+                    st.rerun()
 
     # 3. Map (Below Info)
     # Internal Markers
@@ -346,21 +406,42 @@ if st.session_state.search_query:
     render_kakao_map("map_search", map_markers, DEFAULT_LAT, DEFAULT_LON, selected_name, search_markers)
 
     # 4. List View
+    # Split Kakao results into 'Already Registered' and 'New'
+    registered_names = set(df['Name'].tolist())
+    external_new = [p for p in kakao_res if p['place_name'] not in registered_names]
+    
     if not target_df.empty:
         st.caption(f"📋 등록된 맛집 ({len(target_df)}곳)")
-        with st.container(height=250):
+        with st.container(height=200):
             for _, row in target_df.iterrows():
                 n = row['Name']; c = row['Cuisine'][:4]; r = f"{row['Rating']:.1f}"
                 m = row['BestMenu'] if pd.notna(row['BestMenu']) else ""
                 label = f"{n} | {c} | ⭐{r} | {m}"
-                is_sel = (selected_name == row['Name'])
+                is_sel = (s_status and s_status.get('type') == 'existing' and s_status['data']['Name'] == n)
                 if st.button(label, key=f"btn_search_{row['id']}", type="primary" if is_sel else "secondary", use_container_width=True):
                     st.session_state.selection_status = {'type': 'existing', 'data': row}
                     st.session_state.selected_lat = row['Latitude']
                     st.session_state.selected_lon = row['Longitude']
                     st.rerun()
-    else:
-        st.info("등록된 맛집 검색 결과가 없습니다.")
+
+    if external_new:
+        st.caption(f"🌐 외부 검색 결과 (신규 등록 가능: {len(external_new)}곳)")
+        with st.container(height=200):
+            for i, p in enumerate(external_new):
+                n = p['place_name']
+                addr = p['address_name']
+                dist = p.get('distance', '')
+                dist_str = f"{dist}m" if dist else ""
+                label = f"➕ {n} | {addr} ({dist_str})"
+                is_sel = (s_status and s_status.get('type') == 'new' and s_status['data']['place_name'] == n)
+                if st.button(label, key=f"btn_external_{i}", type="primary" if is_sel else "secondary", use_container_width=True):
+                    st.session_state.selection_status = {'type': 'new', 'data': p}
+                    st.session_state.selected_lat = float(p['y'])
+                    st.session_state.selected_lon = float(p['x'])
+                    st.rerun()
+    
+    if target_df.empty and not external_new:
+        st.info("검색 결과가 없습니다.")
         
     st.markdown("---")
 
