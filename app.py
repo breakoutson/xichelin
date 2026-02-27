@@ -64,33 +64,75 @@ DATA_FILE = os.path.join(DATA_DIR, 'restaurants.csv')
 DEFAULT_LAT = 37.5617864
 DEFAULT_LON = 126.9910438
 
-def save_data(df):
+def save_data(df_or_row, is_new=True):
+    if not supabase:
+        st.error("Supabase client not initialized.")
+        return False
     try:
-        if not os.path.exists(DATA_DIR):
-            os.makedirs(DATA_DIR)
-        df.to_csv(DATA_FILE, index=False)
+        if isinstance(df_or_row, pd.DataFrame):
+            # This is a bit complex for bulk save, usually we save one by one in this app
+            # But let's handle the single row insertion/update logic as requested
+            st.error("Bulk save not implemented for Supabase.")
+            return False
+        
+        # Mapping App keys to DB columns
+        db_payload = {
+            'name': df_or_row['Name'],
+            'cuisine': df_or_row['Cuisine'],
+            'rating': float(df_or_row['Rating']),
+            'rating_count': int(df_or_row.get('RatingCount', 1)),
+            'review': df_or_row['Review'],
+            'latitude': float(df_or_row['Latitude']),
+            'longitude': float(df_or_row['Longitude']),
+            'best_menu': df_or_row['BestMenu'],
+            'recommender': df_or_row['Recommender']
+        }
+        
+        if is_new:
+            supabase.table('restaurants').insert(db_payload).execute()
+        else:
+            supabase.table('restaurants').update(db_payload).eq('id', df_or_row['id']).execute()
+            
         st.cache_data.clear()
         return True
     except Exception as e:
-        st.error(f"Error saving data: {e}")
+        st.error(f"Error saving to database: {e}")
         return False
 
 # --- Data Loading ---
 @st.cache_data(ttl=60)
 def load_data():
-    if not os.path.exists(DATA_FILE):
+    if not supabase:
+        # Fallback to empty DF or local CSV if needed, but primary is Supabase
+        if os.path.exists(DATA_FILE):
+             df = pd.read_csv(DATA_FILE)
+             if 'id' not in df.columns: df['id'] = range(1, len(df) + 1)
+             return df
         return pd.DataFrame(columns=['id', 'Name', 'Cuisine', 'Rating', 'RatingCount', 'Review', 'Latitude', 'Longitude', 'BestMenu', 'Recommender'])
+    
     try:
-        df = pd.read_csv(DATA_FILE)
-        # Ensure numeric types
-        df['Rating'] = pd.to_numeric(df['Rating'], errors='coerce').fillna(0)
-        df['Latitude'] = pd.to_numeric(df['Latitude'], errors='coerce')
-        df['Longitude'] = pd.to_numeric(df['Longitude'], errors='coerce')
-        if 'id' not in df.columns:
-            df['id'] = range(1, len(df) + 1)
+        response = supabase.table('restaurants').select("*").execute()
+        data = response.data
+        if not data:
+            return pd.DataFrame(columns=['id', 'Name', 'Cuisine', 'Rating', 'RatingCount', 'Review', 'Latitude', 'Longitude', 'BestMenu', 'Recommender'])
+        
+        df = pd.DataFrame(data)
+        # Rename DB columns to App columns
+        rename_map = {
+            'name': 'Name',
+            'cuisine': 'Cuisine',
+            'rating': 'Rating',
+            'rating_count': 'RatingCount',
+            'review': 'Review',
+            'latitude': 'Latitude',
+            'longitude': 'Longitude',
+            'best_menu': 'BestMenu',
+            'recommender': 'Recommender'
+        }
+        df = df.rename(columns=rename_map)
         return df
     except Exception as e:
-        st.error(f"Error loading data: {e}")
+        st.error(f"Error loading from database: {e}")
         return pd.DataFrame()
 
 # Import Supabase
@@ -354,9 +396,7 @@ if st.session_state.search_query:
                         if not new_menu or not new_review:
                             st.warning("대표 메뉴와 리뷰를 작성해주세요!")
                         else:
-                            new_id = int(df['id'].max() + 1) if not df.empty else 1
                             new_row = {
-                                'id': new_id,
                                 'Name': selected_name,
                                 'Cuisine': new_cuisine,
                                 'Rating': new_rating,
@@ -367,8 +407,7 @@ if st.session_state.search_query:
                                 'BestMenu': new_menu,
                                 'Recommender': new_recommender
                             }
-                            new_df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                            if save_data(new_df):
+                            if save_data(new_row, is_new=True):
                                 st.success(f"✅ '{selected_name}' 등록 완료!")
                                 time.sleep(1)
                                 st.session_state.selection_status = None
