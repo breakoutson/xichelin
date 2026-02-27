@@ -285,24 +285,40 @@ if 'winner' not in st.session_state: st.session_state.winner = None
 df = load_data()
 
 # --- HEADER ---
-col_h1, col_h2 = st.columns([3, 1])
+col_h1, col_h2 = st.columns([2, 1])
 with col_h1:
-    st.title("자이에스앤디 점심 🍽️")
+    st.markdown(f"<h1 style='margin:0; padding:0;'>자이에스앤디 점심 🍽️</h1>", unsafe_allow_html=True)
 with col_h2:
-    if st.button("🎲 랜덤"):
+    st.write("") # Adjust vertical space
+    if st.button("🎲 랜덤 맛집 선택", use_container_width=True, type="primary"):
         if not df.empty:
-            # Roulette Animation
+            # 1. Clear Search State FIRST
+            st.session_state.search_query = ""
+            
+            # 2. Roulette Animation (Enhanced Tension & Slow Finish)
             placeholder = st.empty()
             names = df['Name'].tolist()
-            delay = 0.05
-            for i in range(15):
-                placeholder.markdown(f"<div style='text-align:center; font-size:18px; font-weight:bold; color:#666;'>🎲 {random.choice(names)}</div>", unsafe_allow_html=True)
-                if i > 8: delay += 0.03
+            
+            # Phase 1: Fast (First 10)
+            for i in range(10):
+                placeholder.markdown(f"<div style='text-align:center; font-size:24px; font-weight:bold; color:#ff4b4b; background:#fff2f2; padding:10px; border-radius:10px; border:2px solid #ff4b4b;'>🎲 {random.choice(names)}</div>", unsafe_allow_html=True)
+                time.sleep(0.05)
+            
+            # Phase 2: Decelerating (Next 10)
+            for i in range(10):
+                delay = 0.05 + (i * 0.05) # Progressively slower
+                placeholder.markdown(f"<div style='text-align:center; font-size:24px; font-weight:bold; color:#ff4b4b; background:#fff2f2; padding:10px; border-radius:10px; border:2px solid #ff4b4b;'>🎲 {random.choice(names)}</div>", unsafe_allow_html=True)
+                time.sleep(delay)
+            
+            # Phase 3: Final Tension (Final 3)
+            for i in range(3):
+                delay = 0.6 + (i * 0.4)
+                placeholder.markdown(f"<div style='text-align:center; font-size:24px; font-weight:bold; color:#ff4b4b; background:#fff2f2; padding:10px; border-radius:10px; border:2px solid #ff4b4b;'>🕒 {random.choice(names)}...</div>", unsafe_allow_html=True)
                 time.sleep(delay)
             
             winner = df.sample(1).iloc[0]
             st.session_state.winner = winner['Name']
-            st.session_state.active_category = winner['Cuisine'] # Open that category
+            st.session_state.active_category = winner['Cuisine']
             st.session_state.selection_status = {'type': 'existing', 'data': winner}
             st.session_state.selected_lat = winner['Latitude']
             st.session_state.selected_lon = winner['Longitude']
