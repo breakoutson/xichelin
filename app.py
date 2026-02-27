@@ -245,6 +245,14 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
                             position: new kakao.maps.LatLng(p.lat, p.lng),
                             image: new kakao.maps.MarkerImage('https://t1.daumcdn.net/localimg/localimages/07/mapapidoc/marker_red.png', new kakao.maps.Size(24, 35))
                         }});
+                        
+                        // Always show name above external marker
+                        var customOverlay = new kakao.maps.CustomOverlay({{
+                            position: new kakao.maps.LatLng(p.lat, p.lng),
+                            content: '<div style="padding:2px 5px; background:#fff; border:1px solid #ff4b4b; border-radius:3px; font-size:11px; font-weight:bold; color:#ff4b4b; transform:translateY(-40px); white-space:nowrap; box-shadow:0 1px 2px rgba(0,0,0,0.2);">' + p.name + '</div>',
+                            map: map
+                        }});
+
                         kakao.maps.event.addListener(marker, 'click', function() {{
                             infowindow.setContent('<div style="padding:5px; font-size:13px;">' + p.name + ' <span style="color:red; font-size:11px;">(외부)</span></div>');
                             infowindow.open(map, marker);
@@ -323,18 +331,27 @@ categories = ["전체", "한식", "중식", "일식", "양식", "분식", "술�
 # If Search is active, we can show a special "Search Results" button at top that is open.
 
 if st.session_state.search_query:
-    # --- SEARCH RESULTS SECTION ---
-    if st.button(f"🔍 '{st.session_state.search_query}' 검색 결과 (클릭하여 닫기)", type="primary", use_container_width=True):
-        st.session_state.search_query = ""
-        st.session_state.active_category = "전체"
-        st.rerun()
-    
     # Filter content
     target_df = df[
         df['Name'].str.contains(st.session_state.search_query) | 
         df['Cuisine'].str.contains(st.session_state.search_query) |
         df['BestMenu'].str.contains(st.session_state.search_query, na=False)
     ]
+    
+    # 1. UI Control: Clear Search or Register New
+    c_btn1, c_btn2 = st.columns([1, 1])
+    with c_btn1:
+        if st.button("❌ 검색어 초기화", use_container_width=True):
+            st.session_state.search_query = ""
+            st.session_state.active_category = "전체"
+            st.session_state.selection_status = None
+            st.rerun()
+    with c_btn2:
+        # Show register button if searching (and potentially not found or just as a shortcut)
+        if st.button("➕ 새로운 맛집 등록", type="primary", use_container_width=True):
+            # If there are kakao results, we could pick the first one or just open registration with name
+            # For now, let it be a general trigger or handled via list click
+            st.info("아래 '외부 검색 결과' 리스트에서 등록할 식당을 선택해주세요.")
     
     # 1. Sort Controls (Hidden in Expander)
     with st.expander("🌪️ 정렬 & 필터", expanded=False):
