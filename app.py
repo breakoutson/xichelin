@@ -46,11 +46,13 @@ st.markdown("""
     div[data-testid="stDecoration"] {display: none !important;}
     div[data-testid="stConnectionStatus"] {display: none !important;}
     
-    /* Specific selectors for annoying branding in newer versions */
+    /* Specific selectors for branding */
     div[class^="viewerBadge"] {display: none !important;}
     button[data-testid="stHeader"] {display: none !important;}
     div[data-testid="stStatusWidget"] {display: none !important;}
     .viewerBadge_container__1QSob {display: none !important;}
+    img[src*="streamlit"] {display: none !important;}
+    a[href*="streamlit"] {display: none !important;}
     
     /* Overall Layout Padding */
     .main .block-container {
@@ -60,9 +62,10 @@ st.markdown("""
         padding-right: 1rem;
     }
 
-    /* Global: Center align standard buttons if desired, but left for lists */
+    /* List Button Style: Left Align */
     div.stButton > button {
-        text-align: center;
+        text-align: left;
+        padding-left: 15px;
     }
     
     /* Mobile Layout Adjustment */
@@ -314,12 +317,10 @@ if 'winner' not in st.session_state: st.session_state.winner = None
 df = load_data()
 
 # --- HEADER ---
-col_h1, col_h2 = st.columns([1.5, 1])
+col_h1, col_h2 = st.columns([3, 1])
 with col_h1:
-    st.markdown(f"<h1 style='margin:0; padding:0; line-height:1.2; font-size: 2.5rem;'>자슐랭</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='margin:0; padding:0; line-height:1.2; font-size: 2.8rem;'>자슐랭</h1>", unsafe_allow_html=True)
 with col_h2:
-    # Use vertical-align or height-matching through CSS-like button label if needed
-    # But for now, st.button with use_container_width fills the column height well
     if st.button("🎲 랜덤 맛집\n선택하기", use_container_width=True, type="primary"):
         if not df.empty:
             # 1. Clear Search State FIRST
@@ -357,28 +358,32 @@ with col_h2:
             st.balloons()
             st.rerun()
             
-# Winner Display
+# --- ROULETTE / WINNER AREA ---
+# This area is placed directly below the header to ensure consistent positioning
+winner_container = st.empty()
+
 if st.session_state.winner:
-    st.markdown(f"""
-    <div style="
-        background: linear-gradient(135deg, #ff4b4b, #ff7e5f);
-        padding: 10px 15px;
-        border-radius: 10px;
-        text-align: center;
-        box-shadow: 0 4px 10px rgba(255, 75, 75, 0.2);
-        margin: 10px 0;
-        animation: winnerPop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
-    ">
-        <span style="color: white; font-size: 13px; font-weight: 400; opacity: 0.85;">🎉 오늘의 추천 맛집</span>
-        <div style="color: white; margin-top: 2px; font-size: 24px; font-weight: 800; text-shadow: 1px 1px 3px rgba(0,0,0,0.1);">{st.session_state.winner}</div>
-    </div>
-    <style>
-    @keyframes winnerPop {{
-        0% {{ transform: scale(0.8); opacity: 0; }}
-        100% {{ transform: scale(1); opacity: 1; }}
-    }}
-    </style>
-    """, unsafe_allow_html=True)
+    with winner_container:
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+            padding: 12px 20px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(37, 117, 252, 0.3);
+            margin: 10px 0;
+            animation: winnerPop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        ">
+            <span style="color: white; font-size: 13px; font-weight: 300; opacity: 0.8;">� 오늘의 정석 추천</span>
+            <div style="color: white; margin-top: 4px; font-size: 26px; font-weight: 800; text-shadow: 1px 1px 5px rgba(0,0,0,0.2);">{st.session_state.winner}</div>
+        </div>
+        <style>
+        @keyframes winnerPop {{
+            0% {{ transform: scale(0.85); opacity: 0; }}
+            100% {{ transform: scale(1); opacity: 1; }}
+        }}
+        </style>
+        """, unsafe_allow_html=True)
 
 # --- DATA PREPARATION ---
 categories = ["전체", "한식", "중식", "일식", "양식", "분식", "술집", "기타"]
