@@ -288,7 +288,7 @@ df = load_data()
 # --- HEADER ---
 col_h1, col_h2 = st.columns([2, 1])
 with col_h1:
-    st.markdown(f"<h1 style='margin:0; padding:0;'>자이에쓴디슐랭</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='margin:0; padding:0;'>자슐랭</h1>", unsafe_allow_html=True)
 with col_h2:
     st.write("") # Adjust vertical space
     if st.button("🎲 랜덤 맛집 선택", use_container_width=True, type="primary"):
@@ -313,7 +313,7 @@ with col_h2:
             
             # Phase 3: Final Tension (Final 3)
             for i in range(3):
-                delay = 0.6 + (i * 0.4) # 0.4를 더 크게 하면 마지막이 아주 천천히 바뀝니다.
+                delay = 0.6 + (i * 0.1) # 0.4를 더 크게 하면 마지막이 아주 천천히 바뀝니다.
                 placeholder.markdown(f"<div style='text-align:center; font-size:24px; font-weight:bold; color:#ff4b4b; background:#fff2f2; padding:10px; border-radius:10px; border:2px solid #ff4b4b;'>🕒 {random.choice(names)}...</div>", unsafe_allow_html=True)
                 time.sleep(delay)
             
@@ -431,11 +431,15 @@ for p in kakao_res:
 # --- RECENT SEARCH LIST (If searching) ---
 if st.session_state.search_query and external_new:
     st.caption(f"➕ 미등록 장소 바로 등록하기")
-    with st.container(height=150):
-        for i, p in enumerate(external_new):
-            if st.button(f"➕ {p['place_name']} | {p['address_name']}", key=f"new_btn_{i}", use_container_width=True):
-                st.session_state.selection_status = {'type': 'new', 'data': p}
-                st.rerun()
+    # Remove fixed height for full page scroll
+    for i, p in enumerate(external_new):
+        n = p['place_name']
+        if len(n) > 15: n = n[:14] + ".."
+        addr = p['address_name']
+        if len(addr) > 20: addr = addr[:19] + ".."
+        if st.button(f"➕ {n} | {addr}", key=f"new_btn_{i}", use_container_width=True):
+            st.session_state.selection_status = {'type': 'new', 'data': p}
+            st.rerun()
 
 # --- LIST VIEW (Moved up for Mobile) ---
 st.caption(f"📋 맛집 리스트 ({len(target_df)}곳)")
@@ -445,14 +449,22 @@ with st.expander("🌪️ 정렬 옵션", expanded=False):
     if c2.button("📏 거리순", use_container_width=True, type="primary" if st.session_state.sort_option=='Distance' else "secondary"): st.session_state.sort_option='Distance'; st.rerun()
     if c3.button("🆕 최신순", use_container_width=True, type="primary" if st.session_state.sort_option=='Newest' else "secondary"): st.session_state.sort_option='Newest'; st.rerun()
 
-with st.container(height=350 if not st.session_state.search_query else 200):
-    for _, row in target_df.iterrows():
-        n = row['Name']; c = row['Cuisine'][:4]; r = f"{row['Rating']:.1f}"
-        m = row['BestMenu'] if pd.notna(row['BestMenu']) else ""
-        is_sel = (selected_name == n)
-        if st.button(f"{n} | {c} | ⭐{r} | {m}", key=f"list_{row['id']}", type="primary" if is_sel else "secondary", use_container_width=True):
-            st.session_state.selection_status = {'type': 'existing', 'data': row}
-            st.rerun()
+# Remove fixed height for full page scroll
+for _, row in target_df.iterrows():
+    n = row['Name']; c = row['Cuisine'][:2]; r = f"{row['Rating']:.1f}"
+    m = row['BestMenu'] if pd.notna(row['BestMenu']) else ""
+    
+    # Compact Version for Mobile (Prevent Line Breaks)
+    if len(n) > 8: n = n[:7] + ".."
+    if len(m) > 10: m = m[:9] + ".."
+    
+    label = f"{n} | {c} | ⭐{r}"
+    if m: label += f" | {m}"
+    
+    is_sel = (selected_name == row['Name'])
+    if st.button(label, key=f"list_{row['id']}", type="primary" if is_sel else "secondary", use_container_width=True):
+        st.session_state.selection_status = {'type': 'existing', 'data': row}
+        st.rerun()
 
 if target_df.empty and not external_new:
     st.info("해당 조건의 맛집이 없습니다.")
