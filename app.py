@@ -36,17 +36,27 @@ st.set_page_config(page_title="회사 점심 지도", page_icon="🍽️", layou
 # CSS: Mobile Layout & Styling
 st.markdown("""
     <style>
-    /* Hide Streamlit Header & Footer & GitHub Fork */
+    /* Hide Streamlit components */
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
     footer {visibility: hidden;}
-    .stDeployButton {display:none;}
+    [data-testid="stStatusWidget"] {display: none !important;}
+    .stAppDeployButton {display: none !important;}
     div[data-testid="stToolbar"] {visibility: hidden;}
+    div[data-testid="stDecoration"] {display: none !important;}
+    div[data-testid="stConnectionStatus"] {display: none !important;}
+    
+    /* Hide the 'Viewer context' and 'Account' badges specifically */
+    div[class^="viewerBadge"] {display: none !important;}
+    button[data-testid="stHeader"] {display: none !important;}
+    div[data-testid="stStatusWidget"] {display: none !important;}
     
     /* Overall Layout Padding */
     .main .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
+        padding-top: 0.5rem;
+        padding-bottom: 0.5rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
     }
 
     /* Global: Center align standard buttons if desired, but left for lists */
@@ -230,6 +240,9 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
                         map: map
                     }});
                     
+                    var infowindow = new kakao.maps.InfoWindow({{ zIndex: 10 }});
+                    var places = {json.dumps(markers)};
+                    var selName = {json.dumps(selected_name) if selected_name else "null"};
                     var selectedOverlay = null;
                     places.forEach(function(p) {{
                         var marker = new kakao.maps.Marker({{ map: map, position: new kakao.maps.LatLng(p.lat, p.lng) }});
@@ -305,6 +318,7 @@ with col_h2:
         if not df.empty:
             # 1. Clear Search State FIRST
             st.session_state.search_query = ""
+            st.session_state.winner = None # Reset winner on new roll
             
             # 2. Roulette Animation (Enhanced Tension & Slow Finish)
             placeholder = st.empty()
@@ -342,20 +356,20 @@ if st.session_state.winner:
     st.markdown(f"""
     <div style="
         background: linear-gradient(135deg, #ff4b4b, #ff7e5f);
-        padding: 24px;
-        border-radius: 16px;
+        padding: 10px 15px;
+        border-radius: 10px;
         text-align: center;
-        box-shadow: 0 4px 15px rgba(255, 75, 75, 0.4);
-        margin: 20px 0;
-        animation: winnerScale 0.6s ease-out forwards;
+        box-shadow: 0 4px 10px rgba(255, 75, 75, 0.2);
+        margin: 10px 0;
+        animation: winnerPop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
     ">
-        <h2 style="color: white; margin: 0; font-size: 20px; font-weight: 500; letter-spacing: 1px;">🎉 오늘의 추천 맛집</h2>
-        <h1 style="color: white; margin: 10px 0; font-size: 42px; font-weight: 900; text-shadow: 2px 2px 10px rgba(0,0,0,0.3);">{st.session_state.winner}</h1>
+        <span style="color: white; font-size: 13px; font-weight: 400; opacity: 0.85;">🎉 오늘의 추천 맛집</span>
+        <div style="color: white; margin-top: 2px; font-size: 24px; font-weight: 800; text-shadow: 1px 1px 3px rgba(0,0,0,0.1);">{st.session_state.winner}</div>
     </div>
     <style>
-    @keyframes winnerScale {{
-        0% {{ transform: translateY(20px); opacity: 0; }}
-        100% {{ transform: translateY(0); opacity: 1; }}
+    @keyframes winnerPop {{
+        0% {{ transform: scale(0.8); opacity: 0; }}
+        100% {{ transform: scale(1); opacity: 1; }}
     }}
     </style>
     """, unsafe_allow_html=True)
