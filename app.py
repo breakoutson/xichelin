@@ -36,17 +36,26 @@ st.set_page_config(page_title="회사 점심 지도", page_icon="🍽️", layou
 # CSS: Mobile Layout & Styling
 st.markdown("""
     <style>
+    /* Hide Streamlit Header & Footer & GitHub Fork */
+    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stDeployButton {display:none;}
+    div[data-testid="stToolbar"] {visibility: hidden;}
+    
+    /* Overall Layout Padding */
+    .main .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+
     /* Global: Center align standard buttons if desired, but left for lists */
     div.stButton > button {
         text-align: center;
     }
     
-    /* Accordion Button Style (Categories) */
-    /* We want these to look distinct? Optional. */
-    
     /* Mobile Layout Adjustment */
     @media (max-width: 768px) {
-        /* Force buttons to be full width for Accordion headers */
         div.stButton > button {
             width: 100% !important;
         }
@@ -179,7 +188,7 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
     <head>
         <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
     </head>
-    <div id="{map_id}" style="width:100%; height:350px; background-color:#f8f9fa; border-radius:12px; border:1px solid #ddd; display:flex; align-items:center; justify-content:center; position:relative;">
+    <div id="{map_id}" style="width:100%; height:300px; background-color:#f8f9fa; border-radius:12px; border:1px solid #ddd; display:flex; align-items:center; justify-content:center; position:relative;">
         <div id="{map_id}_loader" style="position:absolute; z-index:5; color:#666; font-size:14px;">지도를 로드 중...</div>
         <div id="{map_id}_canvas" style="position:absolute; top:0; left:0; width:100%; height:100%;"></div>
     </div>
@@ -273,7 +282,7 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
         }})();
     </script>
     """
-    components.html(html, height=370)
+    components.html(html, height=310)
 
 # --- State Init ---
 if 'active_category' not in st.session_state: st.session_state.active_category = "전체" # Default to Open "All"
@@ -330,7 +339,26 @@ with col_h2:
             
 # Winner Display
 if st.session_state.winner:
-    st.success(f"🎉 오늘의 추천: **{st.session_state.winner}**")
+    st.markdown(f"""
+    <div style="
+        background: linear-gradient(135deg, #ff4b4b, #ff7e5f);
+        padding: 24px;
+        border-radius: 16px;
+        text-align: center;
+        box-shadow: 0 4px 15px rgba(255, 75, 75, 0.4);
+        margin: 20px 0;
+        animation: winnerScale 0.6s ease-out forwards;
+    ">
+        <h2 style="color: white; margin: 0; font-size: 20px; font-weight: 500; letter-spacing: 1px;">🎉 오늘의 추천 맛집</h2>
+        <h1 style="color: white; margin: 10px 0; font-size: 42px; font-weight: 900; text-shadow: 2px 2px 10px rgba(0,0,0,0.3);">{st.session_state.winner}</h1>
+    </div>
+    <style>
+    @keyframes winnerScale {{
+        0% {{ transform: translateY(20px); opacity: 0; }}
+        100% {{ transform: translateY(0); opacity: 1; }}
+    }}
+    </style>
+    """, unsafe_allow_html=True)
 
 # --- DATA PREPARATION ---
 categories = ["전체", "한식", "중식", "일식", "양식", "분식", "술집", "기타"]
@@ -413,7 +441,10 @@ if st.session_state.search_query and external_new:
         
         is_sel = (selected_name == p['place_name'])
         if st.button(f"➕ {n} | {addr}", key=f"new_btn_{i}", use_container_width=True, type="primary" if is_sel else "secondary"):
-            st.session_state.selection_status = {'type': 'new', 'data': p}
+            if is_sel and s_status['type'] == 'new':
+                st.session_state.selection_status = None
+            else:
+                st.session_state.selection_status = {'type': 'new', 'data': p}
             st.rerun()
             
         # Accordion Detail (New Place)
@@ -435,8 +466,6 @@ if st.session_state.search_query and external_new:
                             f_review = new_review if new_review.strip() else "리뷰가 아직 없어요."
                             if save_data({'Name': p['place_name'], 'Cuisine': new_cuisine, 'Rating': new_rating, 'RatingCount': 1, 'Review': f_review, 'Latitude': float(p['y']), 'Longitude': float(p['x']), 'BestMenu': new_menu, 'Recommender': new_recommender}, is_new=True):
                                 st.success("성공적으로 등록되었습니다!"); time.sleep(1); st.session_state.selection_status = None; st.rerun()
-                if st.button("닫기", key=f"close_new_{i}"):
-                    st.session_state.selection_status = None; st.rerun()
 
 # --- LIST VIEW (Moved up for Mobile) ---
 st.caption(f"📋 맛집 리스트 ({len(target_df)}곳)")
@@ -458,7 +487,10 @@ for _, row in target_df.iterrows():
     
     is_sel = (selected_name == row['Name'])
     if st.button(label, key=f"list_{row['id']}", type="primary" if is_sel else "secondary", use_container_width=True):
-        st.session_state.selection_status = {'type': 'existing', 'data': row}
+        if is_sel and s_status['type'] == 'existing':
+            st.session_state.selection_status = None
+        else:
+            st.session_state.selection_status = {'type': 'existing', 'data': row}
         st.rerun()
         
     # Accordion Detail (Existing Place)
@@ -467,9 +499,6 @@ for _, row in target_df.iterrows():
             st.subheader(f"🍽️ {row['Name']}")
             st.caption(f"⭐ {row['Rating']:.1f} | {row['BestMenu']}")
             st.markdown(f"> {row['Review']}")
-            if st.button("상세 정보 닫기", key=f"close_detail_{row['id']}", use_container_width=True):
-                st.session_state.selection_status = None
-                st.rerun()
 
 if target_df.empty and not external_new:
     st.info("해당 조건의 맛집이 없습니다.")
