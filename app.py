@@ -173,7 +173,8 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None, search_markers=None):
     if search_markers is None: search_markers = []
     
-    # Final fix for Mixed Content & Mobile rendering
+    # Kakao SDK is loaded once globally in the app, but kept here for backward compatibility if called separately.
+    # However, to avoid conflicts, we'll try to ensure it loads efficiently.
     html = f"""
     <head>
         <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
@@ -182,7 +183,7 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
         <div id="{map_id}_loader" style="position:absolute; z-index:5; color:#666; font-size:14px;">지도를 로드 중...</div>
         <div id="{map_id}_canvas" style="position:absolute; top:0; left:0; width:100%; height:100%;"></div>
     </div>
-    <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={DEFAULT_JS_API_KEY}&libraries=services&autoload=false"></script>
+    <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey={DEFAULT_JS_API_KEY}&libraries=services,clusterer,drawing&autoload=false"></script>
     <script>
         (function() {{
             var container = document.getElementById('{map_id}_canvas');
@@ -287,7 +288,7 @@ df = load_data()
 # --- HEADER ---
 col_h1, col_h2 = st.columns([2, 1])
 with col_h1:
-    st.markdown(f"<h1 style='margin:0; padding:0;'>자이에스앤디 점심 🍽️</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='margin:0; padding:0;'>자이에쓴디슐랭</h1>", unsafe_allow_html=True)
 with col_h2:
     st.write("") # Adjust vertical space
     if st.button("🎲 랜덤 맛집 선택", use_container_width=True, type="primary"):
@@ -306,16 +307,17 @@ with col_h2:
             
             # Phase 2: Decelerating (Next 10)
             for i in range(10):
-                delay = 0.05 + (i * 0.05) # Progressively slower
+                delay = 0.05 + (i * 0.05) # 이 숫자를 키우면 점점 더 느려집니다.
                 placeholder.markdown(f"<div style='text-align:center; font-size:24px; font-weight:bold; color:#ff4b4b; background:#fff2f2; padding:10px; border-radius:10px; border:2px solid #ff4b4b;'>🎲 {random.choice(names)}</div>", unsafe_allow_html=True)
                 time.sleep(delay)
             
             # Phase 3: Final Tension (Final 3)
             for i in range(3):
-                delay = 0.6 + (i * 0.4)
+                delay = 0.6 + (i * 0.4) # 0.4를 더 크게 하면 마지막이 아주 천천히 바뀝니다.
                 placeholder.markdown(f"<div style='text-align:center; font-size:24px; font-weight:bold; color:#ff4b4b; background:#fff2f2; padding:10px; border-radius:10px; border:2px solid #ff4b4b;'>🕒 {random.choice(names)}...</div>", unsafe_allow_html=True)
                 time.sleep(delay)
             
+            # 3. Final Selection
             winner = df.sample(1).iloc[0]
             st.session_state.winner = winner['Name']
             st.session_state.active_category = winner['Cuisine']
@@ -324,287 +326,141 @@ with col_h2:
             st.session_state.selected_lon = winner['Longitude']
             st.balloons()
             st.rerun()
-
+            
 # Winner Display
 if st.session_state.winner:
     st.success(f"🎉 오늘의 추천: **{st.session_state.winner}**")
 
-# --- MAIN: Accordion Logic ---
+# --- DATA PREPARATION ---
+categories = ["전체", "한식", "중식", "일식", "양식", "분식", "술집", "기타"]
 
-# 1. Global Search (Always visible at top)
+# 1. Category Selector (Horizontal Radio)
+current_cat = st.radio("📂 카테고리 선택", categories, index=categories.index(st.session_state.active_category) if st.session_state.active_category in categories else 0, horizontal=True)
+if current_cat != st.session_state.active_category:
+    st.session_state.active_category = current_cat
+    st.session_state.selection_status = None # Reset selection on category change
+    st.rerun()
+
+# 2. Global Search
 search_input = st.text_input("🔍 통합 검색", value=st.session_state.search_query, placeholder="메뉴, 식당명 검색...")
 if search_input != st.session_state.search_query:
     st.session_state.search_query = search_input
-    st.session_state.active_category = "SEARCH_RESULTS" # Open special section
+    if search_input:
+        st.session_state.active_category = "전체" # Switch to show all if searching
     st.rerun()
 
-# Categories List
-categories = ["전체", "한식", "중식", "일식", "양식", "분식", "술집", "기타"]
-
-# If Search is active, render the Search Results "Accordion" first/only?
-# User wants "Accordion Style".
-# Let's render the list of Category Buttons.
-# If Search is active, we can show a special "Search Results" button at top that is open.
-
+# Filtering Logic
+target_df = df.copy()
 if st.session_state.search_query:
-    s_status = st.session_state.selection_status
-    
-    # Filter content (Existing)
-    target_df = df[
-        df['Name'].str.contains(st.session_state.search_query) | 
-        df['Cuisine'].str.contains(st.session_state.search_query) |
-        df['BestMenu'].str.contains(st.session_state.search_query, na=False)
+    target_df = target_df[
+        target_df['Name'].str.contains(st.session_state.search_query) | 
+        target_df['Cuisine'].str.contains(st.session_state.search_query) |
+        target_df['BestMenu'].str.contains(st.session_state.search_query, na=False)
     ]
-    
-    # Fetch External Results (New)
-    try:
-        kakao_res = search_kakao_place(st.session_state.search_query)
-    except:
-        kakao_res = []
-    
-    registered_names = set(df['Name'].tolist())
-    external_new = [p for p in kakao_res if p['place_name'] not in registered_names]
-    
-    # 1. 통합 검색 결과 리스트 (상단 배치)
-    st.caption(f"🔍 '{st.session_state.search_query}' 검색 결과 (등록 {len(target_df)} / 미등록 {len(external_new)})")
-    
-    with st.container(height=260): # 버튼들이 있던 자리에 리스트 배치
-        # A. 등록된 맛집 리스트
-        for _, row in target_df.iterrows():
-            n = row['Name']; c = row['Cuisine'][:4]; r = f"{row['Rating']:.1f}"
-            m = row['BestMenu'] if pd.notna(row['BestMenu']) else ""
-            label = f"🏢 {n} | {c} | ⭐{r} | {m}"
-            
-            # 현재 선택된 항목인지 확인
-            is_sel = (s_status and s_status.get('type') == 'existing' and s_status['data']['id'] == row['id'])
-            
-            if st.button(label, key=f"top_res_reg_{row['id']}", type="primary" if is_sel else "secondary", use_container_width=True):
-                st.session_state.selection_status = {'type': 'existing', 'data': row}
-                st.session_state.selected_lat = row['Latitude']
-                st.session_state.selected_lon = row['Longitude']
+elif st.session_state.active_category != "전체":
+    target_df = target_df[target_df['Cuisine'] == st.session_state.active_category]
+
+# Sort Logic
+if st.session_state.sort_option == 'Rating': 
+    target_df = target_df.sort_values(by='Rating', ascending=False)
+elif st.session_state.sort_option == 'Newest': 
+    target_df = target_df.sort_values(by='id', ascending=False)
+elif st.session_state.sort_option == 'Distance':
+    def _calc(r):
+        if pd.isna(r['Latitude']): return 99999
+        return calculate_distance(DEFAULT_LAT, DEFAULT_LON, r['Latitude'], r['Longitude'])
+    target_df['Distance'] = target_df.apply(_calc, axis=1)
+    target_df = target_df.sort_values(by='Distance', ascending=True)
+
+# Selection Detail View
+s_status = st.session_state.selection_status
+selected_name = None
+if s_status:
+    if s_status.get('type') == 'existing':
+        d_row = s_status['data']
+        selected_name = d_row['Name']
+        with st.container(border=True):
+            st.subheader(f"🍽️ {d_row['Name']}")
+            st.caption(f"⭐ {d_row['Rating']:.1f} | {d_row['BestMenu']}")
+            st.info(d_row['Review'])
+            if st.button("닫기", key="close_detail"):
+                st.session_state.selection_status = None
                 st.rerun()
-        
-        # B. 미등록 맛집 리스트 (카카오 검색 결과 중 DB에 없는 것)
-        for i, p in enumerate(external_new):
-            n = p['place_name']
-            addr = p['address_name']
-            dist = p.get('distance', '')
-            dist_str = f"{dist}m" if dist else ""
-            label = f"➕ {n} | {addr} ({dist_str})"
-            
-            # 현재 선택된 항목인지 확인
-            is_sel = (s_status and s_status.get('type') == 'new' and s_status['data']['place_name'] == n)
-            
-            if st.button(label, key=f"top_res_new_{i}", type="primary" if is_sel else "secondary", use_container_width=True):
-                st.session_state.selection_status = {'type': 'new', 'data': p}
-                st.session_state.selected_lat = float(p['y'])
-                st.session_state.selected_lon = float(p['x'])
-                st.rerun()
-    
-    if target_df.empty and not external_new:
-        st.info("검색 결과가 없습니다.")
-        if st.button("❌ 검색어 초기화", use_container_width=True):
-            st.session_state.search_query = ""
-            st.rerun()
-    
-    # 1. Sort Controls (Hidden in Expander)
-    with st.expander("🌪️ 정렬 & 필터", expanded=False):
-        s_col1, s_col2, s_col3 = st.columns(3)
-        current_sort = st.session_state.sort_option
-        if s_col1.button("⭐ 평점순", key="sort_rate_search", type="primary" if current_sort=='Rating' else "secondary", use_container_width=True):
-            st.session_state.sort_option = 'Rating'; st.rerun()
-        if s_col2.button("📏 거리순", key="sort_dist_search", type="primary" if current_sort=='Distance' else "secondary", use_container_width=True):
-            st.session_state.sort_option = 'Distance'; st.rerun()
-        if s_col3.button("🆕 최신순", key="sort_new_search", type="primary" if current_sort=='Newest' else "secondary", use_container_width=True):
-            st.session_state.sort_option = 'Newest'; st.rerun()
+    elif s_status.get('type') == 'new':
+        new_place = s_status['data']
+        selected_name = new_place['place_name']
+        with st.container(border=True):
+            st.subheader(f"🆕 맛집 등록: {selected_name}")
+            st.caption(f"📍 {new_place['address_name']}")
+            with st.form("reg_form"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    new_cuisine = st.selectbox("카테고리", ["한식", "중식", "일식", "양식", "분식", "술집", "기타"], index=(["한식", "중식", "일식", "양식", "분식", "술집", "기타"].index(st.session_state.active_category) if st.session_state.active_category in ["한식", "중식", "일식", "양식", "분식", "술집", "기타"] else 0))
+                    new_rating = st.slider("평점", 0.0, 5.0, 4.0, 0.5)
+                with col2:
+                    new_menu = st.text_input("대표 메뉴", placeholder="추천 메뉴")
+                    new_recommender = st.text_input("추천인", value="익명")
+                new_review = st.text_area("한줄평", placeholder="맛이나 분위기...")
+                if st.form_submit_button("등록", type="primary", use_container_width=True):
+                    if not new_menu: st.warning("대표 메뉴를 적어주세요!")
+                    else:
+                        f_review = new_review if new_review.strip() else "리뷰가 없습니다."
+                        if save_data({'Name': selected_name, 'Cuisine': new_cuisine, 'Rating': new_rating, 'RatingCount': 1, 'Review': f_review, 'Latitude': float(new_place['y']), 'Longitude': float(new_place['x']), 'BestMenu': new_menu, 'Recommender': new_recommender}, is_new=True):
+                            st.success("등록 완료!"); time.sleep(1); st.session_state.selection_status = None; st.rerun()
+            if st.button("취소"): st.session_state.selection_status = None; st.rerun()
 
-    # Sort Logic
-    if st.session_state.sort_option == 'Rating': target_df = target_df.sort_values(by='Rating', ascending=False)
-    elif st.session_state.sort_option == 'Newest': target_df = target_df.sort_values(by='id', ascending=False)
-    elif st.session_state.sort_option == 'Distance':
-         def _calc(r):
-             if pd.isna(r['Latitude']): return 99999
-             return calculate_distance(DEFAULT_LAT, DEFAULT_LON, r['Latitude'], r['Longitude'])
-         target_df['Distance'] = target_df.apply(_calc, axis=1)
-         target_df = target_df.sort_values(by='Distance', ascending=True)
+# --- DATA PREP FOR MAP & EXTERNAL ---
+map_markers = []
+for _, row in target_df.iterrows():
+    if pd.notna(row['Latitude']):
+        map_markers.append({"lat": row['Latitude'], "lng": row['Longitude'], "name": row['Name'], "rating": row['Rating']})
+if selected_name and s_status and s_status.get('type') == 'existing':
+    map_markers = [m for m in map_markers if m['name'] == selected_name]
 
-    # 2. Detail View (Search)
-    selected_name = None
-    
-    if s_status:
-        if s_status.get('type') == 'existing':
-            d_row = s_status['data']
-            selected_name = d_row['Name']
-            with st.container(border=True):
-                st.subheader(f"🍽️ {d_row['Name']}")
-                st.caption(f"⭐ {d_row['Rating']:.1f} | {d_row['BestMenu']}")
-                st.info(d_row['Review'])
-                if st.button("닫기", key="close_search_detail"):
-                    st.session_state.selection_status = None
-                    st.rerun()
-        
-        elif s_status.get('type') == 'new':
-            new_place = s_status['data']
-            selected_name = new_place['place_name']
-            with st.container(border=True):
-                st.subheader(f"🆕 맛집 등록: {selected_name}")
-                st.caption(f"📍 {new_place['address_name']}")
-                
-                with st.form("registration_form"):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        new_cuisine = st.selectbox("카테고리", ["한식", "중식", "일식", "양식", "분식", "술집", "기타"])
-                        new_rating = st.slider("평점", 0.0, 5.0, 4.0, 0.5)
-                    with col2:
-                        new_menu = st.text_input("대표 메뉴", placeholder="추천 메뉴를 적어주세요")
-                        new_recommender = st.text_input("추천인", value="익명")
-                    
-                    new_review = st.text_area("한줄평 / 리뷰", placeholder="맛이나 분위기 등을 공유해주세요")
-                    
-                    submitted = st.form_submit_button("등록하기", type="primary", use_container_width=True)
-                    if submitted:
-                        if not new_menu:
-                            st.warning("대표 메뉴를 작성해주세요!")
-                        else:
-                            # If review is empty, provide a default or handle it
-                            final_review = new_review if new_review.strip() else "리뷰가 없습니다."
-                            new_row = {
-                                'Name': selected_name,
-                                'Cuisine': new_cuisine,
-                                'Rating': new_rating,
-                                'RatingCount': 1,
-                                'Review': final_review,
-                                'Latitude': float(new_place['y']),
-                                'Longitude': float(new_place['x']),
-                                'BestMenu': new_menu,
-                                'Recommender': new_recommender
-                            }
-                            if save_data(new_row, is_new=True):
-                                st.success(f"✅ '{selected_name}' 등록 완료!")
-                                time.sleep(1)
-                                st.session_state.selection_status = None
-                                st.rerun()
-                
-                if st.button("취소", key="cancel_reg"):
-                    st.session_state.selection_status = None
-                    st.rerun()
-
-    # 3. Map (Injected earlier)
-    # Internal Markers
-    map_markers = []
-    for _, row in target_df.iterrows():
-        if pd.notna(row['Latitude']):
-            map_markers.append({"lat": row['Latitude'], "lng": row['Longitude'], "name": row['Name'], "rating": row['Rating']})
-    
-    if selected_name:
-        map_markers = [m for m in map_markers if m['name'] == selected_name]
-    
-    search_markers = []
-    for p in kakao_res:
-         search_markers.append({"lat": float(p['y']), "lng": float(p['x']), "name": p['place_name']})
-    
-    render_kakao_map("map_search", map_markers, DEFAULT_LAT, DEFAULT_LON, selected_name, search_markers)
-
-    # 4. (중복 리스트 제거됨)
-    pass
-        
-    st.markdown("---")
-
-else:
-    # --- CATEGORY TABS (Scrollable Layout) ---
-    st.markdown("### 📂 카테고리")
-    tabs = st.tabs(categories)
-    
-    for cat, tab in zip(categories, tabs):
-        with tab:
-            # 1. Filter Data
-            target_df = df.copy()
-            if cat != "전체":
-                target_df = target_df[target_df['Cuisine'] == cat]
-            
-            # 2. Sort Controls (Hidden in Expander)
-            with st.expander("🌪️ 정렬 & 필터", expanded=False):
-                s_col1, s_col2, s_col3 = st.columns(3)
-                current_sort = st.session_state.sort_option
-                if s_col1.button("⭐ 평점순", key=f"sort_rate_{cat}", type="primary" if current_sort=='Rating' else "secondary", use_container_width=True):
-                    st.session_state.sort_option = 'Rating'; st.rerun()
-                if s_col2.button("📏 거리순", key=f"sort_dist_{cat}", type="primary" if current_sort=='Distance' else "secondary", use_container_width=True):
-                    st.session_state.sort_option = 'Distance'; st.rerun()
-                if s_col3.button("🆕 최신순", key=f"sort_new_{cat}", type="primary" if current_sort=='Newest' else "secondary", use_container_width=True):
-                    st.session_state.sort_option = 'Newest'; st.rerun()
-            
-            # Apply Sort
-            if st.session_state.sort_option == 'Rating': 
-                target_df = target_df.sort_values(by='Rating', ascending=False)
-            elif st.session_state.sort_option == 'Newest': 
-                target_df = target_df.sort_values(by='id', ascending=False)
-            elif st.session_state.sort_option == 'Distance':
-                 def _calc(r):
-                     if pd.isna(r['Latitude']): return 99999
-                     return calculate_distance(DEFAULT_LAT, DEFAULT_LON, r['Latitude'], r['Longitude'])
-                 target_df['Distance'] = target_df.apply(_calc, axis=1)
-                 target_df = target_df.sort_values(by='Distance', ascending=True)
-
-            # 3. Selected Item Info Card (Displayed ABOVE Map)
-            status = st.session_state.selection_status
-            selected_name = None
-            if status and status.get('type')=='existing':
-                 d_row = status['data']
-                 # Check if item belongs to current view (optional, but good for context)
-                 # For "All" show everything. For "Korean" show only Korean.
-                 if cat == "전체" or d_row['Cuisine'] == cat:
-                     selected_name = d_row['Name']
-                     with st.container(border=True):
-                         st.subheader(f"🍽️ {d_row['Name']}")
-                         st.caption(f"⭐ {d_row['Rating']:.1f} | {d_row['BestMenu']}")
-                         st.info(d_row['Review'])
-                         if st.button("닫기", key=f"close_{cat}"):
-                             st.session_state.selection_status = None
-                             st.rerun()
-
-            # 4. Map View
-            map_markers = []
-            for _, row in target_df.iterrows():
-                 if pd.notna(row['Latitude']): 
-                     map_markers.append({"lat": row['Latitude'], "lng": row['Longitude'], "name": row['Name']})
-            
-            if selected_name:
-                map_markers = [m for m in map_markers if m['name'] == selected_name]
-            
-            # Map HTML
-            map_id = f"map_tab_{cat.replace(' ', '_')}"
-            render_kakao_map(map_id, map_markers, DEFAULT_LAT, DEFAULT_LON, selected_name)
-
-            # 5. List View (Below Map)
-            if not target_df.empty:
-                 st.caption(f"📋 {cat} 맛집 ({len(target_df)}곳)")
-                 with st.container(height=300):
-                     for _, row in target_df.iterrows():
-                         n = row['Name']; c = row['Cuisine'][:4]; r = f"{row['Rating']:.1f}"
-                         m = row['BestMenu'] if pd.notna(row['BestMenu']) else ""
-                         if len(m)>10: m = m[:9]+".."
-                         if len(n)>8: n = n[:7]+".."
-                         label = f"{n} | {c} | ⭐{r} | {m}"
-                         
-                         is_sel = (selected_name == row['Name'])
-                         if st.button(label, key=f"btn_{cat}_{row['id']}", type="primary" if is_sel else "secondary", use_container_width=True):
-                             st.session_state.selection_status = {'type':'existing', 'data':row}
-                             st.session_state.selected_lat = row['Latitude']
-                             st.session_state.selected_lon = row['Longitude']
-                             st.rerun()
-            else:
-                 st.info("등록된 맛집이 없습니다.")
-
-# Check logic for Search Results View (Duplicated layout or helper?)
-# To save space, I handled search separately above, but I should probably render the same dashboard structure.
-# I will leave the Search View simple (List + Local Map) for now. Use the same patterns.
+kakao_res = []
 if st.session_state.search_query:
-    st.write("---")
-    # Search Dashboard Logic (Simplified)
-    # ... (Reuse logic logic if possible, but hard without helper)
-    # I will rely on the "Search" accordion button approach I drafted above?
-    # Actually, the code above `if st.session_state.search_query:` replaces the loop.
-    # So if searching, you see one big "Search Results" block. 
-    # That works.
-    pass
+    try: kakao_res = search_kakao_place(st.session_state.search_query)
+    except: pass
+search_markers = []
+registered_names = set(df['Name'].tolist())
+external_new = []
+for p in kakao_res:
+    search_markers.append({"lat": float(p['y']), "lng": float(p['x']), "name": p['place_name']})
+    if p['place_name'] not in registered_names: external_new.append(p)
+
+# --- RECENT SEARCH LIST (If searching) ---
+if st.session_state.search_query and external_new:
+    st.caption(f"➕ 미등록 장소 바로 등록하기")
+    with st.container(height=150):
+        for i, p in enumerate(external_new):
+            if st.button(f"➕ {p['place_name']} | {p['address_name']}", key=f"new_btn_{i}", use_container_width=True):
+                st.session_state.selection_status = {'type': 'new', 'data': p}
+                st.rerun()
+
+# --- LIST VIEW (Moved up for Mobile) ---
+st.caption(f"📋 맛집 리스트 ({len(target_df)}곳)")
+with st.expander("🌪️ 정렬 옵션", expanded=False):
+    c1, c2, c3 = st.columns(3)
+    if c1.button("⭐ 평점순", use_container_width=True, type="primary" if st.session_state.sort_option=='Rating' else "secondary"): st.session_state.sort_option='Rating'; st.rerun()
+    if c2.button("📏 거리순", use_container_width=True, type="primary" if st.session_state.sort_option=='Distance' else "secondary"): st.session_state.sort_option='Distance'; st.rerun()
+    if c3.button("🆕 최신순", use_container_width=True, type="primary" if st.session_state.sort_option=='Newest' else "secondary"): st.session_state.sort_option='Newest'; st.rerun()
+
+with st.container(height=350 if not st.session_state.search_query else 200):
+    for _, row in target_df.iterrows():
+        n = row['Name']; c = row['Cuisine'][:4]; r = f"{row['Rating']:.1f}"
+        m = row['BestMenu'] if pd.notna(row['BestMenu']) else ""
+        is_sel = (selected_name == n)
+        if st.button(f"{n} | {c} | ⭐{r} | {m}", key=f"list_{row['id']}", type="primary" if is_sel else "secondary", use_container_width=True):
+            st.session_state.selection_status = {'type': 'existing', 'data': row}
+            st.rerun()
+
+if target_df.empty and not external_new:
+    st.info("해당 조건의 맛집이 없습니다.")
+    if st.session_state.search_query:
+        if st.button("검색 초기화"): st.session_state.search_query=""; st.rerun()
+
+# --- MAP VIEW (Moved down) ---
+render_kakao_map("main_map", map_markers, DEFAULT_LAT, DEFAULT_LON, selected_name, search_markers)
+
+
 
