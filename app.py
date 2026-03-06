@@ -203,7 +203,7 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
                 
                 kakao.maps.load(function() {{
                     loader.style.display = 'none';
-                    var level = parseInt(sessionStorage.getItem('map_zoom_{map_id}') || '2');
+                    var level = parseInt(sessionStorage.getItem('map_zoom_{map_id}') || '3');
                     var options = {{
                         center: new kakao.maps.LatLng({center_lat}, {center_lon}),
                         level: level
@@ -221,10 +221,7 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
                         map: map
                     }});
                     
-                    var infowindow = new kakao.maps.InfoWindow({{ zIndex: 10 }});
-                    var places = {json.dumps(markers)};
-                    var selName = {json.dumps(selected_name) if selected_name else "null"};
-                    
+                    var selectedOverlay = null;
                     places.forEach(function(p) {{
                         var marker = new kakao.maps.Marker({{ map: map, position: new kakao.maps.LatLng(p.lat, p.lng) }});
                         kakao.maps.event.addListener(marker, 'click', function() {{
@@ -232,8 +229,12 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
                             infowindow.open(map, marker);
                         }});
                         if (selName && p.name === selName) {{
-                            infowindow.setContent('<div style="padding:5px; font-size:13px;">' + p.name + '</div>');
-                            infowindow.open(map, marker);
+                            if (selectedOverlay) selectedOverlay.setMap(null);
+                            selectedOverlay = new kakao.maps.CustomOverlay({{
+                                position: new kakao.maps.LatLng(p.lat, p.lng),
+                                content: '<div style="padding:6px 12px; background:white; border:2px solid #ff4b4b; border-radius:8px; font-size:13px; font-weight:bold; color:#333; position:relative; bottom:55px; left:0%; transform:translateX(-50%); white-space:nowrap; box-shadow:0 3px 8px rgba(0,0,0,0.3);">' + p.name + '<div style="position:absolute; bottom:-8px; left:50%; margin-left:-6px; border-width:8px 6px 0; border-style:solid; border-color:#ff4b4b transparent transparent;"></div></div>',
+                                map: map
+                            }});
                             map.setCenter(new kakao.maps.LatLng(p.lat, p.lng));
                         }}
                     }});
@@ -372,42 +373,14 @@ elif st.session_state.sort_option == 'Distance':
     target_df['Distance'] = target_df.apply(_calc, axis=1)
     target_df = target_df.sort_values(by='Distance', ascending=True)
 
-# Selection Detail View
+# Selection State Prep
 s_status = st.session_state.selection_status
 selected_name = None
 if s_status:
     if s_status.get('type') == 'existing':
-        d_row = s_status['data']
-        selected_name = d_row['Name']
-        with st.container(border=True):
-            st.subheader(f"🍽️ {d_row['Name']}")
-            st.caption(f"⭐ {d_row['Rating']:.1f} | {d_row['BestMenu']}")
-            st.info(d_row['Review'])
-            if st.button("닫기", key="close_detail"):
-                st.session_state.selection_status = None
-                st.rerun()
+        selected_name = s_status['data']['Name']
     elif s_status.get('type') == 'new':
-        new_place = s_status['data']
-        selected_name = new_place['place_name']
-        with st.container(border=True):
-            st.subheader(f"🆕 맛집 등록: {selected_name}")
-            st.caption(f"📍 {new_place['address_name']}")
-            with st.form("reg_form"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    new_cuisine = st.selectbox("카테고리", ["한식", "중식", "일식", "양식", "분식", "술집", "기타"], index=(["한식", "중식", "일식", "양식", "분식", "술집", "기타"].index(st.session_state.active_category) if st.session_state.active_category in ["한식", "중식", "일식", "양식", "분식", "술집", "기타"] else 0))
-                    new_rating = st.slider("평점", 0.0, 5.0, 4.0, 0.5)
-                with col2:
-                    new_menu = st.text_input("대표 메뉴", placeholder="추천 메뉴")
-                    new_recommender = st.text_input("추천인", value="익명")
-                new_review = st.text_area("한줄평", placeholder="맛이나 분위기...")
-                if st.form_submit_button("등록", type="primary", use_container_width=True):
-                    if not new_menu: st.warning("대표 메뉴를 적어주세요!")
-                    else:
-                        f_review = new_review if new_review.strip() else "리뷰가 없습니다."
-                        if save_data({'Name': selected_name, 'Cuisine': new_cuisine, 'Rating': new_rating, 'RatingCount': 1, 'Review': f_review, 'Latitude': float(new_place['y']), 'Longitude': float(new_place['x']), 'BestMenu': new_menu, 'Recommender': new_recommender}, is_new=True):
-                            st.success("등록 완료!"); time.sleep(1); st.session_state.selection_status = None; st.rerun()
-            if st.button("취소"): st.session_state.selection_status = None; st.rerun()
+        selected_name = s_status['data']['place_name']
 
 # --- DATA PREP FOR MAP & EXTERNAL ---
 map_markers = []
@@ -437,9 +410,33 @@ if st.session_state.search_query and external_new:
         if len(n) > 15: n = n[:14] + ".."
         addr = p['address_name']
         if len(addr) > 20: addr = addr[:19] + ".."
-        if st.button(f"➕ {n} | {addr}", key=f"new_btn_{i}", use_container_width=True):
+        
+        is_sel = (selected_name == p['place_name'])
+        if st.button(f"➕ {n} | {addr}", key=f"new_btn_{i}", use_container_width=True, type="primary" if is_sel else "secondary"):
             st.session_state.selection_status = {'type': 'new', 'data': p}
             st.rerun()
+            
+        # Accordion Detail (New Place)
+        if is_sel and s_status['type'] == 'new':
+            with st.container(border=True):
+                st.caption("🆕 새로운 맛집 등록")
+                with st.form(f"reg_form_{i}"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        new_cuisine = st.selectbox("카테고리", ["한식", "중식", "일식", "양식", "분식", "술집", "기타"], index=(["한식", "중식", "일식", "양식", "분식", "술집", "기타"].index(st.session_state.active_category) if st.session_state.active_category in ["한식", "중식", "일식", "양식", "분식", "술집", "기타"] else 0))
+                        new_rating = st.slider("평점", 0.0, 5.0, 4.0, 0.5)
+                    with col2:
+                        new_menu = st.text_input("대표 메뉴", placeholder="추천 메뉴")
+                        new_recommender = st.text_input("추천인", value="익명")
+                    new_review = st.text_area("한줄평", placeholder="미각을 사로잡은 포인트는?")
+                    if st.form_submit_button("맛집 등록하기", type="primary", use_container_width=True):
+                        if not new_menu: st.warning("대표 메뉴는 필수입니다!")
+                        else:
+                            f_review = new_review if new_review.strip() else "리뷰가 아직 없어요."
+                            if save_data({'Name': p['place_name'], 'Cuisine': new_cuisine, 'Rating': new_rating, 'RatingCount': 1, 'Review': f_review, 'Latitude': float(p['y']), 'Longitude': float(p['x']), 'BestMenu': new_menu, 'Recommender': new_recommender}, is_new=True):
+                                st.success("성공적으로 등록되었습니다!"); time.sleep(1); st.session_state.selection_status = None; st.rerun()
+                if st.button("닫기", key=f"close_new_{i}"):
+                    st.session_state.selection_status = None; st.rerun()
 
 # --- LIST VIEW (Moved up for Mobile) ---
 st.caption(f"📋 맛집 리스트 ({len(target_df)}곳)")
@@ -453,8 +450,6 @@ with st.expander("🌪️ 정렬 옵션", expanded=False):
 for _, row in target_df.iterrows():
     n = row['Name']; c = row['Cuisine'][:2]; r = f"{row['Rating']:.1f}"
     m = row['BestMenu'] if pd.notna(row['BestMenu']) else ""
-    
-    # Compact Version for Mobile (Prevent Line Breaks)
     if len(n) > 8: n = n[:7] + ".."
     if len(m) > 10: m = m[:9] + ".."
     
@@ -465,6 +460,16 @@ for _, row in target_df.iterrows():
     if st.button(label, key=f"list_{row['id']}", type="primary" if is_sel else "secondary", use_container_width=True):
         st.session_state.selection_status = {'type': 'existing', 'data': row}
         st.rerun()
+        
+    # Accordion Detail (Existing Place)
+    if is_sel and s_status['type'] == 'existing':
+        with st.container(border=True):
+            st.subheader(f"🍽️ {row['Name']}")
+            st.caption(f"⭐ {row['Rating']:.1f} | {row['BestMenu']}")
+            st.markdown(f"> {row['Review']}")
+            if st.button("상세 정보 닫기", key=f"close_detail_{row['id']}", use_container_width=True):
+                st.session_state.selection_status = None
+                st.rerun()
 
 if target_df.empty and not external_new:
     st.info("해당 조건의 맛집이 없습니다.")
