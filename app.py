@@ -36,25 +36,26 @@ st.set_page_config(page_title="회사 점심 지도", page_icon="🍽️", layou
 # CSS: Mobile Layout & Styling
 st.markdown("""
     <style>
-    /* Hide Streamlit components */
-    #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
-    footer {visibility: hidden;}
+    /* Hide all Streamlit branding and elements */
+    #MainMenu {visibility: hidden; display: none !important;}
+    header {visibility: hidden; display: none !important;}
+    footer {visibility: hidden; display: none !important;}
     [data-testid="stStatusWidget"] {display: none !important;}
     .stAppDeployButton {display: none !important;}
-    div[data-testid="stToolbar"] {visibility: hidden;}
+    div[data-testid="stToolbar"] {visibility: hidden; display: none !important;}
     div[data-testid="stDecoration"] {display: none !important;}
     div[data-testid="stConnectionStatus"] {display: none !important;}
     
-    /* Hide the 'Viewer context' and 'Account' badges specifically */
+    /* Specific selectors for annoying branding in newer versions */
     div[class^="viewerBadge"] {display: none !important;}
     button[data-testid="stHeader"] {display: none !important;}
     div[data-testid="stStatusWidget"] {display: none !important;}
+    .viewerBadge_container__1QSob {display: none !important;}
     
     /* Overall Layout Padding */
     .main .block-container {
-        padding-top: 0.5rem;
-        padding-bottom: 0.5rem;
+        padding-top: 1rem;
+        padding-bottom: 1rem;
         padding-left: 1rem;
         padding-right: 1rem;
     }
@@ -254,7 +255,11 @@ def render_kakao_map(map_id, markers, center_lat, center_lon, selected_name=None
                             if (selectedOverlay) selectedOverlay.setMap(null);
                             selectedOverlay = new kakao.maps.CustomOverlay({{
                                 position: new kakao.maps.LatLng(p.lat, p.lng),
-                                content: '<div style="padding:6px 12px; background:white; border:2px solid #ff4b4b; border-radius:8px; font-size:13px; font-weight:bold; color:#333; position:relative; bottom:55px; left:0%; transform:translateX(-50%); white-space:nowrap; box-shadow:0 3px 8px rgba(0,0,0,0.3);">' + p.name + '<div style="position:absolute; bottom:-8px; left:50%; margin-left:-6px; border-width:8px 6px 0; border-style:solid; border-color:#ff4b4b transparent transparent;"></div></div>',
+                                content: '<div style="position:absolute; bottom:45px; left:50%; transform:translateX(-50%);">' +
+                                         '<div style="padding:6px 12px; background:white; border:2px solid #ff4b4b; border-radius:8px; font-size:13px; font-weight:bold; color:#333; white-space:nowrap; box-shadow:0 3px 8px rgba(0,0,0,0.3); position:relative;">' + 
+                                         p.name + 
+                                         '<div style="position:absolute; bottom:-9px; left:50%; margin-left:-6px; width:0; height:0; border-left:6px solid transparent; border-right:6px solid transparent; border-top:8px solid #ff4b4b;"></div>' +
+                                         '</div></div>',
                                 map: map
                             }});
                             map.setCenter(new kakao.maps.LatLng(p.lat, p.lng));
@@ -309,12 +314,13 @@ if 'winner' not in st.session_state: st.session_state.winner = None
 df = load_data()
 
 # --- HEADER ---
-col_h1, col_h2 = st.columns([2, 1])
+col_h1, col_h2 = st.columns([1.5, 1])
 with col_h1:
-    st.markdown(f"<h1 style='margin:0; padding:0;'>자슐랭</h1>", unsafe_allow_html=True)
+    st.markdown(f"<h1 style='margin:0; padding:0; line-height:1.2; font-size: 2.5rem;'>자슐랭</h1>", unsafe_allow_html=True)
 with col_h2:
-    st.write("") # Adjust vertical space
-    if st.button("🎲 랜덤 맛집 선택", use_container_width=True, type="primary"):
+    # Use vertical-align or height-matching through CSS-like button label if needed
+    # But for now, st.button with use_container_width fills the column height well
+    if st.button("🎲 랜덤 맛집\n선택하기", use_container_width=True, type="primary"):
         if not df.empty:
             # 1. Clear Search State FIRST
             st.session_state.search_query = ""
